@@ -17,7 +17,8 @@
  - Notes
     - The "reordered_traffic_500000_slots_1_con.tra" file cannot be committed to GitHub due to larger than 100 MB of size. This file will be uploaded to another cloud repo.
     
-
+# TODO
+ - Re-organize each algorithm's source code into a separated folder
 
 
     
