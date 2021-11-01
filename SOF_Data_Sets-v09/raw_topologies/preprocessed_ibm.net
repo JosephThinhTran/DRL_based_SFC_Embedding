@@ -1,0 +1,62 @@
+18	% number of routers
+48	% number of directed links
+% list of directed links
+% u, v, bandwidth per direction, delay
+0 3 0 0.01
+0 7 0 0.01
+1 17 0 0.01
+1 5 0 0.01
+1 6 0 0.01
+2 9 0 0.01
+2 3 0 0.01
+2 4 0 0.01
+3 0 0 0.01
+3 2 0 0.01
+4 2 0 0.01
+4 8 0 0.01
+4 5 0 0.01
+4 6 0 0.01
+5 1 0 0.01
+5 4 0 0.01
+5 15 0 0.01
+6 1 0 0.01
+6 4 0 0.01
+6 16 0 0.01
+6 7 0 0.01
+7 0 0 0.01
+7 6 0 0.01
+8 4 0 0.01
+8 12 0 0.01
+9 2 0 0.01
+9 17 0 0.01
+10 11 0 0.01
+11 10 0 0.01
+11 17 0 0.01
+11 12 0 0.01
+12 8 0 0.01
+12 11 0 0.01
+12 13 0 0.01
+13 12 0 0.01
+13 14 0 0.01
+14 13 0 0.01
+14 17 0 0.01
+14 15 0 0.01
+15 5 0 0.01
+15 14 0 0.01
+15 16 0 0.01
+16 6 0 0.01
+16 15 0 0.01
+17 1 0 0.01
+17 9 0 0.01
+17 11 0 0.01
+17 14 0 0.01
+% list of compute nodes and their resource capacity: CPU (#), RAM (GB), storage (GB), # VNFs, VNF list
+8 % number of data centers
+DC0 2 0 0 0 2 vnf_3 vnf_4
+DC1 3 0 0 0 2 vnf_1 vnf_2
+DC2 5 0 0 0 3 vnf_1 vnf_3 vnf_4
+DC3 7 0 0 0 2 vnf_2 vnf_3
+DC4 12 0 0 0 4 vnf_1 vnf_2 vnf_3 vnf_4
+DC5 13 0 0 0 2 vnf_1 vnf_3
+DC6 15 0 0 0 3 vnf_1 vnf_2 vnf_4
+DC7 17 0 0 0 3 vnf_2 vnf_3 vnf_4

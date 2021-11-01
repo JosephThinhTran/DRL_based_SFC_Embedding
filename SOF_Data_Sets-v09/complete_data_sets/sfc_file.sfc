@@ -1,0 +1,45 @@
+% list of NFVs and their bandwidth unit requirements: CPU, processing delay (s)
+4 % number of VNFs
+vnf_1 3 0.005
+vnf_2 2 0.003
+vnf_3 2 0.004
+vnf_4 8 0.004
+% list of SFCs: described using a DAG
+10 % number of SFCs
+% SFC id, number of arcs of this SFC
+% list of arcs
+SFC_0 3
+vnf_4 vnf_2
+vnf_2 vnf_1
+vnf_1 vnf_3
+SFC_1 3
+vnf_2 vnf_1
+vnf_1 vnf_3
+vnf_3 vnf_4
+SFC_2 3
+vnf_2 vnf_4
+vnf_4 vnf_1
+vnf_1 vnf_3
+SFC_3 1
+vnf_2 vnf_4
+SFC_4 2
+vnf_1 vnf_4
+vnf_4 vnf_2
+SFC_5 3
+vnf_3 vnf_1
+vnf_1 vnf_4
+vnf_4 vnf_2
+SFC_6 2
+vnf_3 vnf_4
+vnf_4 vnf_1
+SFC_7 2
+vnf_2 vnf_4
+vnf_4 vnf_3
+SFC_8 3
+vnf_3 vnf_1
+vnf_1 vnf_4
+vnf_4 vnf_2
+SFC_9 3
+vnf_4 vnf_3
+vnf_3 vnf_1
+vnf_1 vnf_2
