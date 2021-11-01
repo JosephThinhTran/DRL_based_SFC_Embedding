@@ -2,7 +2,7 @@
  DRL-based algorithms for solving SFC Embedding Problems
 
 # Implemented Algorithms
- - A2C-based SFC embedding
+ ## A2C-based SFC embedding
     - Apply Advantage Actor-Critic DRL algorithm to solve the SFC embedding problem
 
 # Dataset
