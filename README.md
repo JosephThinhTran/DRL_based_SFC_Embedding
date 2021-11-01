@@ -5,6 +5,9 @@
  ## A2C-based SFC embedding
     - Apply Advantage Actor-Critic DRL algorithm to solve the SFC embedding problem
 
+ ## DQN-based SFC embedding
+    - Apply DQN RL algorithm to solve the SFC embedding problem
+
 # Dataset
  - Using the Dataset created by Huy Duong in the Ciena SOF-WP1 Project
 
