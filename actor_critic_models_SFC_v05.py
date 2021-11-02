@@ -23,7 +23,7 @@ from matplotlib import pyplot as plt
 import os
 from collections import deque
 from edf_env_A3C_v2_02 import EdfEnv
-from data_utils_A3C_02 import mov_window_avg
+from data_utils_A3C_02 import mov_window_avg, delete_data
 from datetime import datetime
 from pathlib import Path
 import json
@@ -32,6 +32,7 @@ from IPython.display import clear_output
 from collections import namedtuple
 import gc #garbage collector
 from IPython.display import clear_output
+from onpolicy_memory import OnPolicyReplay, OnPolicyBatchReplay
 
 
 # Node_Info = namedtuple('Node_Info', ['node_id', 'cpu_cap', 'cpu_free', 'ram_cap', 'ram_free',
@@ -116,9 +117,7 @@ class ACNet(torch.nn.Module):
         '''
         super(ACNet, self).__init__()
 
-        self.NET_ARCH = {'shared_net': 1,
-                    'shared_net_w_RNN':2,
-                    'separated_net':3}
+        self.NET_ARCH = {'shared_net': 1, 'shared_net_w_RNN':2, 'separated_net':3}
         
         # load params to the class
         self.name = name
@@ -231,6 +230,8 @@ class A3CWorker(mp.Process):
     def __init__(self, worker_id, global_model, optimizer, params, traffic_file, counter, 
                 net_arch, is_train=True):
         super(A3CWorker, self).__init__()
+
+        self.ADV_STYLE = {'n_step_return': 1, 'gae': 2}
         
         self.worker_id = worker_id
         self.global_model = global_model
@@ -254,7 +255,7 @@ class A3CWorker(mp.Process):
         self.gamma = params['gamma']
         self.tau = params['tau']
         self.N_steps = params['N_steps']
-        self.max_moves = params['max_moves']
+        # self.max_moves = params['max_moves']
         
         self.data_folder = params['data_folder']
         self.net_file = params['datasets'][worker_id]['net_topo']
@@ -270,11 +271,22 @@ class A3CWorker(mp.Process):
         # self.n_req = len(traffic_file)
 
         self.is_train = is_train
+
+        # Deploy rollout buffer in training mode
+        if self.is_train:
+            self.train_freq = params['train_freq']
+            self.memory = OnPolicyReplay(self.N_steps) # batch of episodes' experiences
+        
+        # Advantage calculation method
+        if self.params['adv_style'] == self.ADV_STYLE['n_step_return']:
+            self.calc_advs_v_targets = self.calc_nstep_advs_v_targets
+        elif self.params['adv_style'] == self.ADV_STYLE['gae']:
+            self.calc_advs_v_targets = self.calc_gae_adv_v_targests
             
         # Create an EDF environment
         self.create_edf_env()
         
-        #### TODO: Logging
+        #### Logging
         if self.is_train:
             # self.operation_log = os.path.join(params['train_dir'], "W_" + str(self.worker_id) + "_train.log")
             self.ep_reward_log = os.path.join(params['train_dir'], "W_" + str(self.worker_id) + "_ep_reward.log")
@@ -379,8 +391,6 @@ class A3CWorker(mp.Process):
         # Run an episode and update the neural_network's weights
         for epoch in range(self.params['epochs']):
             if self.is_train:
-                # Reload the local_model parameter with the newest global_model parameter
-                self.worker_model.load_state_dict(self.global_model.state_dict())
                 # update operation log file name
                 floor, remainder = np.divmod(epoch, 50_000)
                 if remainder == 0:
@@ -389,24 +399,22 @@ class A3CWorker(mp.Process):
 
             # Play an episode with the env
             print(f"worker_id = {self.worker_id}| local_episode = {epoch}")
-            values, logprobs, entropies, rewards, G, this_episode_rwd = self.run_episode(epoch)
-            
-            # Worker updates the global model's parameters
-            if self.is_train:
-                actor_loss, critic_loss, eplen = self.update_params(values, logprobs, entropies, rewards, G)
-                # actor_loss, critic_loss, eplen = self.update_params_gae(values, logprobs, entropies, rewards, G)
-
-            # print(f"actor_loss = {actor_loss}| critic_loss = {critic_loss}")
-            print(f"episode_reward = {this_episode_rwd:.3f}| episode_len = {len(rewards)}\n")
+            # values, logprobs, entropies, rewards, G, this_episode_rwd = self.run_episode(epoch)
+            this_episode_rwd, eplen = self.run_episode(epoch)
+            print(f"episode_reward = {this_episode_rwd:.3f}| episode_len = {eplen}\n")
             with open(self.ep_reward_log, 'a') as rwd_fp:
                 print(f"{this_episode_rwd:.3f}", file=rwd_fp)
-
-            # Update the global counter
-            with self.g_counter.get_lock():   
-                self.g_counter.value += 1
             
-            # garbage collector and clear output
-            if np.divmod(epoch, 500)[1] == 0: 
+            # Worker updates the global model's parameters
+            if self.is_train and ((epoch+1) % self.train_freq == 0):
+                print(f"UPDATE NEURAL NET's Params at epoch {epoch}")
+                actor_loss, critic_loss = self.update_params_batch()
+                # Update the global counter
+                with self.g_counter.get_lock():
+                    self.g_counter.value += 1
+
+            # Garbage collector and clear output
+            if np.divmod(epoch, 500)[1] == 0:
                 gc.collect()
                 clear_output(wait=True)
         # END of FOR loop
@@ -515,7 +523,7 @@ class A3CWorker(mp.Process):
                 # print(f"hx = {hx}")
             # print(f"critic_value = {critic_value}")
             # print(f"action_probs = {action_probs}")
-            values.append(critic_value)
+            # values.append(critic_value)
             
             #### Apply action to the env
             action_dist = torch.distributions.Categorical(probs=action_probs.view(-1))
@@ -530,14 +538,14 @@ class A3CWorker(mp.Process):
             # print(f"action_raw = {action_raw}")
 
             # Calculate log_prob
-            log_action_prob = action_dist.log_prob(action_raw)
-            logprobs.append(log_action_prob)
-            # print(f"log_prob[{action_raw}] = {logprob_dist.view(-1)[action_raw]}")
+            log_prob_action = action_dist.log_prob(action_raw)
+            # logprobs.append(log_prob_action)
+            # print(f"{log_prob_action}")
 
             # Calculate entropy
             # entropy = -(logprob_dist * action_probs).sum(1)
             entropy = action_dist.entropy()
-            entropies.append(entropy)
+            # entropies.append(entropy)
 
             # Convert to the real action space before applying to the environment
             action_raw = action_raw.detach().to('cpu').item() # convert from tensor to normal Python data type
@@ -598,7 +606,7 @@ class A3CWorker(mp.Process):
             else:
                 reward = -self.edf.big_reward
             # Append to reward list
-            rewards.append(reward)
+            # rewards.append(reward)
             # Accumulate episode reward
             this_episode_rwd += reward
             # print(f"action_raw = {action_raw}| real_action = {action}| step_reward = {reward}")
@@ -610,9 +618,6 @@ class A3CWorker(mp.Process):
             else:
                 fail_embed = 0
                 success_embed = 1 if done_embed > 0 else 0
-            
-            # EDF env transits to the next state
-            state1 = state2
 
             print(f"Time_{self.cur_time_slot}_Epoch_{epoch}_Step_{mov}   Cur_node={prev_node_id}   {req['sfc_id']}-{prev_hol_vnf_name}   Action={action}   Residual_delay={residual_delay:.4f}   Step_Reward={reward:.3f}   Success_embed={success_embed}")
             with open(self.operation_log, 'a') as train_fp:
@@ -658,16 +663,179 @@ class A3CWorker(mp.Process):
                 else:
                     _, G, _ = self.worker_model(state2, hx)
                 G = G.squeeze(0) * (1 - stop_flag)
+            
+            # store examples to memory
+            if self.is_train:
+                self.memory.add_experience(log_prob_action, entropy, critic_value, reward, stop_flag, G)
+
+            # EDF env transits to the next state
+            state1 = state2
         # END of inner WHILE loop
-        del(hx)
+        # delete hx
+        if self.net_arch == self.worker_model.NET_ARCH['shared_net_w_RNN']:
+            delete_data([hx])
         # Add episode-reward to list
         self.episode_rewards.append(this_episode_rwd)
         # # garbage collector
         # gc.collect()
         # clear_output(wait=True)
         # Return results
-        return values, logprobs, entropies, rewards, G, this_episode_rwd
-    """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""    
+        # return values, logprobs, entropies, rewards, G, this_episode_rwd
+        return this_episode_rwd, mov
+    """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
+
+    def calc_nstep_returns(self, rewards, dones, next_v_pred):
+        rets = torch.zeros_like(rewards)
+        future_ret = next_v_pred
+        not_done = 1 - dones
+        n = len(rewards)
+        for t in reversed(range(n)):
+            rets[t] = future_ret = rewards[t] + self.gamma * future_ret * not_done[t]
+        return rets
+
+    def calc_nstep_advs_v_targets(self, batch):
+        "Calculate advantages from the batch of episodes' experiences using N-step return"
+        advs_list, v_targets_list = [], []
+        for epi in range(self.train_freq):
+            advs, v_targets = [], []
+            cur_epi_data = {k: batch[k][epi] for k in self.memory.data_keys}
+            next_v_pred = cur_epi_data['last_returns'][-1] # G
+            v_preds = [item.detach() for item in cur_epi_data['v_preds']]# adv does not accumulate gradient
+            v_preds = torch.from_numpy(np.array(v_preds))# convert to a new tensor
+            # Calculate n-step return
+            nstep_rets = self.calc_nstep_returns(cur_epi_data['rewards'], cur_epi_data['dones'], next_v_pred)
+            advs = nstep_rets - v_preds
+            v_targets = nstep_rets
+            advs_list.append(advs)
+            v_targets_list.append(v_targets)
+
+        # flatten the list into one tensor
+        # print(f"Before advs_list = {advs_list}")
+        advs_list = torch.cat(advs_list, dim=0)
+        # print(f"advs_list = {advs_list}")
+        # print(f"Before v_targets_list = {v_targets_list}")
+        v_targets_list = torch.cat(v_targets_list, dim=0)
+        # print(f"v_targets_list = {v_targets_list}")
+        return advs_list, v_targets_list
+
+    def calc_gae(self, rewards, dones, v_preds_all):
+        T = len(rewards)
+        assert T+1 == len(v_preds_all), f"T+1: {T+1} v.s. v_preds.shape: {v_preds_all.shape}"  # v_preds runs into t+1
+        gaes = torch.zeros_like(rewards)
+        future_gae = torch.tensor(0.0, dtype=rewards.dtype)
+        not_dones = 1 - dones
+        deltas = rewards + self.gamma * v_preds_all[1:] * not_dones - v_preds_all[:-1]
+        coef = self.gamma * self.tau
+        for t in reversed(range(T)):
+            gaes[t] = future_gae = deltas[t] + coef * not_dones[t] * future_gae
+        return gaes
+    
+    def standardize(self, v):
+        "Method to standardize a rank-1 np array"
+        assert len(v) > 1, 'Cannot standardize vector of size 1'
+        v_std = (v - v.mean()) / (v.std() + 1e-08)
+        return v_std
+
+    def calc_gae_adv_v_targests(self, batch):
+        "Calculate advantages from the batch of episodes' experiences using GAE"
+        advs_list, v_targets_list = [], []
+        for epi in range(self.train_freq):
+            advs, v_targets = [], []
+            cur_epi_data = {k: batch[k][epi] for k in self.memory.data_keys}
+            next_v_pred = cur_epi_data['last_returns'][-1] #G
+            v_preds = [item.detach() for item in cur_epi_data['v_preds']]# adv does not accumulate gradient
+            v_preds = torch.from_numpy(np.array(v_preds))# convert to a new tensor
+            # Calculate GAE return
+            v_preds_all = torch.cat((v_preds, next_v_pred), dim=0)
+            advs = self.calc_gae(cur_epi_data['rewards'], cur_epi_data['dones'], v_preds_all)
+            v_targets = advs + v_preds
+            v_targets_list.append(v_targets)
+            advs_list.append(advs)
+        
+        # flatten the list into one tensor
+        advs_list = torch.stack(advs_list, dim=0)
+        advs_list = self.standardize(advs_list)
+        v_targets_list = torch.stack(v_targets_list, dim=0)
+        return advs_list, v_targets_list
+
+
+    def calc_policy_loss(self, batch, adv_list):
+        "Calculate the policy loss from the batch of episodes' experiences"
+        logprobs_list = torch.cat(batch['logprobs'], dim=0)
+        entropy_list = [batch['entropies'][epi][-1].unsqueeze(0) for epi in range(self.train_freq)]
+        entropy_list = torch.cat(entropy_list, dim=0)
+        policy_loss = - self.params['actor_factor'] * (logprobs_list * adv_list).mean()
+        policy_loss += - (self.params['entropy_factor'] * entropy_list.mean())
+        return policy_loss
+
+    def calc_critic_loss(self, batch, v_targets_list):
+        "Calculate the ciritic loss from the batch of episodes' experiences"
+        v_preds_list = torch.cat(batch['v_preds'], dim=0)
+        assert v_preds_list.shape == v_targets_list.shape, "v_preds_list.shape == v_targets_list.shape"
+        critic_loss = self.params['critic_factor'] * F.mse_loss(v_preds_list, v_targets_list)
+        return critic_loss
+        
+    def to_torch_batch(self, batch):
+        "Convert an episodic batch memory into episodic batch of tensors"
+        x = {k: [] for k in self.memory.data_keys}
+        for k in self.memory.data_keys:
+            for epi in range(self.train_freq):
+                # print(f"batch[{k}][{epi}] = {batch[k][epi]}")
+                if torch.is_tensor(batch[k][epi][0]):
+                    temp = batch[k][epi]
+                    x[k].append(torch.stack(temp, dim=0).view(-1))
+                else:
+                    temp = np.array(batch[k][epi])
+                    x[k].append(torch.from_numpy(temp.astype(np.float32)))
+            # print(f"x[{k}] = {x[k]}")
+        return x
+
+    def update_params_batch(self):
+        """
+        Compute and minimizing the loss for updating the model
+    
+        Parameters
+        ----------
+
+        Returns
+        -------
+        TYPE
+            DESCRIPTION.
+    
+        """
+        batch = self.memory.sample()
+        batch = self.to_torch_batch(batch)
+        advs_list, v_targets_list = self.calc_advs_v_targets(batch)
+        actor_loss = self.calc_policy_loss(batch, advs_list)
+        critic_loss = self.calc_critic_loss(batch, v_targets_list)
+        loss = actor_loss + critic_loss
+        print(f"actor_loss = {actor_loss:g}\t critic_loss = {critic_loss:g}\t loss = {loss:g}")
+
+        # Update neural network's weights using the loss
+        self.optimizer.zero_grad()
+        loss.backward()
+        # torch.nn.utils.clip_grad_norm_(self.worker_model.parameters(), 0.5) # clamping gradient from 0 to 50 for avoiding algorithm degeneration
+        
+        # Ensure the global and local models share the same gradient
+        for local_param, global_param in zip(self.worker_model.parameters(), self.global_model.parameters()):
+            global_param._grad = local_param.grad
+        
+        # Optimizing
+        self.optimizer.step()
+
+        # Reload the local_model parameter with the newest global_model parameter
+        self.worker_model.load_state_dict(self.global_model.state_dict())
+        
+        # Logging
+        self.actor_loss.append(actor_loss.item())
+        self.critic_loss.append(critic_loss.item())
+        self.losses.append(loss.item())
+        with open(self.loss_log, 'a') as lfp:
+            print(f"{actor_loss.item():g} {critic_loss.item():g} {loss.item():g}", file=lfp)
+
+        # # garbage collector
+        # gc.collect()
+        return actor_loss, critic_loss
         
     def update_params(self, values, logprobs, entropies, rewards, G):
         """
@@ -736,8 +904,11 @@ class A3CWorker(mp.Process):
         with open(self.loss_log, 'a') as lfp:
             print(f"{actor_loss.item():g} {critic_loss.item():g} {loss.item():g}", file=lfp)
         
+        # Reload the local_model parameter with the newest global_model parameter
+        self.worker_model.load_state_dict(self.global_model.state_dict())
+
         # delete data to save RAM
-        self.delete_data([values, logprobs, entropies, rewards, G])
+        delete_data([values, logprobs, entropies, rewards, G])
         # values, logprobs, entropies, rewards, G = [], [], [], [], []
         # # garbage collector
         # gc.collect()
@@ -821,6 +992,9 @@ class A3CWorker(mp.Process):
         # Optimizing
         self.optimizer.step()
         
+        # Reload the local_model parameter with the newest global_model parameter
+        self.worker_model.load_state_dict(self.global_model.state_dict())
+
         # Logging
         self.actor_loss.append(actor_loss.mean())
         self.critic_loss.append(critic_loss.mean())
@@ -830,9 +1004,6 @@ class A3CWorker(mp.Process):
 
         return actor_loss, critic_loss, len(rewards)
     
-    def delete_data(self, DataList):
-        for item in DataList:
-            del(item)
     
         
 # =============================================================================

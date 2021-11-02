@@ -887,6 +887,13 @@ def accept_rate_per_slot(adm_hist):
     
     return adm_rate_list
 
+# =============================================================================
+# Delete data
+# =============================================================================
+def delete_data(DataList):
+    for item in DataList:
+        del(item)
+
 
 #########################################
 # ### Main function

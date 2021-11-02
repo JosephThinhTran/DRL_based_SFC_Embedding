@@ -60,7 +60,7 @@ def read_loss_data(log_files):
 def worker(a3c_worker, g_counter):
     a3c_worker.run(g_counter)
 
-def main(is_train, network_arch):
+def main(is_train, network_arch, adv_style):
     ### Training Settings
     IS_BINARY_STATE = True # Using Binary encoded state
     IS_NEIGHBOR_MASK = False# Neighborhood mask Default = False
@@ -68,12 +68,9 @@ def main(is_train, network_arch):
     STATE_NOISE_SCALE = 100.
     RESOURCE_SCALER = 1.0
 
-    OPERATION_MODE = {'train_mode': 1, 
-                      'test_mode': 0}
-
-    NET_ARCH = {'shared_net': 1,
-                'shared_net_w_RNN':2,
-                'separated_net':3}
+    OPERATION_MODE = {'train_mode': 1, 'test_mode': 0}
+    NET_ARCH = {'shared_net': 1, 'shared_net_w_RNN':2, 'separated_net':3}
+    ADV_STYLE = {'n_step_return': 1, 'gae': 2}
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
     ''' Train/Test mode '''
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
@@ -81,9 +78,10 @@ def main(is_train, network_arch):
     
     #### Training parameters
     N_EPOCHS = 500_000 if not IS_CONTINUE_TRAINING else 500_000
-    N_STEPS = 10 # N-step training for actor-critic, N-step=0 --> use Monte-Carlo sampling
+    N_STEPS = 15 # N-step training for actor-critic, N-step=0 --> use Monte-Carlo sampling
     MAX_MOVE = 25 # Max number of steps per episode
     N_CPUS = 1#int(mp.cpu_count()/2)
+    TRAIN_FREQ = 25 # Num of episode per training
     
     #### Create Model Folder 
     MODEL_NAME = "AC_Agent"
@@ -133,7 +131,7 @@ def main(is_train, network_arch):
     # INPUT_DIMS = temp_edf.n_state_dims
     INPUT_DIMS = temp_edf.n_state_dims
     ACTOR_OUTPUT_DIMS = 2 * temp_edf.n_nodes
-    L_COMMON_1 = 256
+    L_COMMON_1 = 128
     L_COMMON_2 = 128
     L_CRITIC_1 = 128
     L_RNN = 128
@@ -153,9 +151,9 @@ def main(is_train, network_arch):
     #### Learning parameters
     GAMMA = 0.99
     TAU = 1.0
-    LEARNING_RATE = 7e-4
+    LEARNING_RATE = 1e-3
     ACTOR_FACTOR = 1
-    CRITIC_FACTOR = 0.5
+    CRITIC_FACTOR = 1
     ENTROPY_FACTOR = 0.01
 
     #### RMSProp's parameters
@@ -218,8 +216,15 @@ def main(is_train, network_arch):
         print(f"Opt_Momentum = {RMS_MOMENTUM}", file=fp)
         print(f"Opt_Centered = {RMS_CENTERED}", file=fp)
         
-        print("Training parameters", file=fp)
-        print(f"N_EPOCHS = {N_EPOCHS}", file=fp)
+        if OPERATION_MODE["train_mode"]:
+            print("Training parameters", file=fp)
+            print(f"N_EPOCHS = {N_EPOCHS}", file=fp)
+            print(f"TRAIN_FREQ = {TRAIN_FREQ}", file=fp)
+            if adv_style == ADV_STYLE['n_step_return']:
+                print(f"ADVANTAGE_STYLE = N_step return")
+            elif adv_style == ADV_STYLE['gae']:
+                print(f"ADVANTAGE_STYLE = GAE")
+
            
     print("Export system parameter setting into text files ... DONE!")
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
@@ -281,6 +286,8 @@ def main(is_train, network_arch):
                     'model_dir': MODEL_DIR,
                     'train_dir': TRAIN_DIR,
                     'test_dir': TEST_DIR,
+                    'train_freq': TRAIN_FREQ,
+                    'adv_style': adv_style,
                     'hidden_layers': FC_HID_LAYERS,
                     'input_dims': INPUT_DIMS,
                     'actor_dims': ACTOR_OUTPUT_DIMS,
@@ -310,6 +317,8 @@ def main(is_train, network_arch):
                     'model_dir': MODEL_DIR,
                     'train_dir': TRAIN_DIR,
                     'test_dir': TEST_DIR,
+                    'train_freq': TRAIN_FREQ,
+                    'adv_style': adv_style,
                     'hidden_layers': FC_HID_LAYERS,
                     'input_dims': INPUT_DIMS,
                     'actor_dims': ACTOR_OUTPUT_DIMS,
@@ -536,12 +545,14 @@ def diff_weights(model1, model2):
 if __name__ == "__main__":
     OPERATION_MODE = {'train_mode': 1, 'test_mode': 0}
     NET_ARCH = {'shared_net': 1, 'shared_net_w_RNN':2, 'separated_net':3}
+    ADV_STYLE = {'n_step_return': 1, 'gae': 2}# n-step return or GAE
     
     # Choose neural network architecture
     network_arch = NET_ARCH['shared_net_w_RNN']
-    operating_mode = OPERATION_MODE['train_mode']
+    operating_mode = OPERATION_MODE['test_mode']
+    adv_style = ADV_STYLE['n_step_return']
 
-    Before_Model, After_Model = main(operating_mode, network_arch)
+    Before_Model, After_Model = main(operating_mode, network_arch, adv_style)
     
     diff, before_weights, after_weights = diff_weights(Before_Model, After_Model)
     if network_arch == NET_ARCH['shared_net']:
