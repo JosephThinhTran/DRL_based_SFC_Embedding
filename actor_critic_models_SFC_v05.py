@@ -247,6 +247,7 @@ class A3CWorker(mp.Process):
 
         self.params = params
         self.g_counter = counter
+        self.max_episodes = params['epochs'][self.worker_id]
         
         # self.optimizer = optim.Adam(lr=self.params['learning_rate'], params=global_model.parameters()) # optimizer
         self.optimizer = optimizer
@@ -262,6 +263,9 @@ class A3CWorker(mp.Process):
         self.sfc_file = params['sfc_spec']
         
         self.resource_scaler = params['resource_scaler']
+
+        self.betas = params['betas'] #cost factors for the reward function
+        self.big_rwd = params['big_rwd']
                 
         # Traffic request file
         self.req_json_file = os.path.join(params['data_folder'], 
@@ -305,7 +309,8 @@ class A3CWorker(mp.Process):
         self.edf = EdfEnv(data_path=self.data_folder,
                           net_file=self.net_file,
                           sfc_file=self.sfc_file,
-                          resource_scaler=self.resource_scaler)
+                          resource_scaler=self.resource_scaler,
+                          betas=self.betas, big_rwd=self.big_rwd)
         if self.params['is_binary_state']:
             self.edf.binary_state_dim()
         else:
@@ -366,7 +371,7 @@ class A3CWorker(mp.Process):
         
         # Main training loop
         start_id = 0
-        end_id = self.params['epochs']
+        end_id = self.max_episodes
         # req_id_list = list(range(start_id, end_id))
         self.req_id_list = []
         for key in self.req_list.keys():
@@ -376,9 +381,6 @@ class A3CWorker(mp.Process):
         self.start_time_slot = self.req_list[start_id]['arrival_time']
         #print(f'Start time slot: {self.start_time_slot}')
         
-        # worker_opt = optim.Adam(lr=1e-4, params=self.worker_model.parameters()) #
-        # self.optimizer.zero_grad() #clear gradients
-        
         # Episode_reward list
         self.episode_rewards = []
         self.actor_loss = []
@@ -386,16 +388,21 @@ class A3CWorker(mp.Process):
         self.losses = []
         self.n_accepted_req = 0
 
-        
         ''' Run the episodes '''
         # Run an episode and update the neural_network's weights
-        for epoch in range(self.params['epochs']):
+        for epoch in range(self.max_episodes):
             if self.is_train:
                 # update operation log file name
-                floor, remainder = np.divmod(epoch, 50_000)
+                floor, remainder = np.divmod(epoch, 25_000)
                 if remainder == 0:
                     self.operation_log = os.path.join(self.params['train_dir'], "W_" + str(self.worker_id) + 
                                                         "_train_" + str(floor) + ".log")
+                # update entropy_factor
+                if np.divmod(epoch, self.params['entropy_decay_freq'])[1] == 0:
+                    self.params['entropy_factor'] = \
+                        max(self.params['entropy_factor'] - self.params['entropy_decay_val'], 
+                            self.params['entropy_min'])
+
 
             # Play an episode with the env
             print(f"worker_id = {self.worker_id}| local_episode = {epoch}")
@@ -420,7 +427,7 @@ class A3CWorker(mp.Process):
         # END of FOR loop
     
         with open(self.accept_ratio_log, 'a') as fp:
-            print(f"Acceptance ratio = {self.n_accepted_req / self.params['epochs'] * 100}", file=fp)
+            print(f"Acceptance ratio = {self.n_accepted_req / self.max_episodes * 100}", file=fp)
         ''''''''''''''''''''''''''''''''''''''''''''''''
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
     
@@ -444,7 +451,6 @@ class A3CWorker(mp.Process):
             print(f"Req_Id={req['id']}|   source={req['source']}|   destination={req['destination']}|\
                {req['sfc_id']}:[{self.edf.sfc_specs[req['sfc_id']]}]|\
                       bw={req['bw']}   delay_req={req['delay_req']:.4f}", file=fp)
-        
         
         #### Check new time slot
         if req['arrival_time'] == self.cur_time_slot + 1 + self.start_time_slot:
@@ -484,6 +490,7 @@ class A3CWorker(mp.Process):
         
         # Get delay constraint
         residual_delay = req['delay_req']
+        delay_budget = req['delay_req'] # request's end-to-end delay constraint
         
         # Get a copy of the current resource and bandwidth information
         self.edf.temp_resource_mat = copy(self.edf.resource_mat)
@@ -499,7 +506,7 @@ class A3CWorker(mp.Process):
         state1 = torch.from_numpy(state1).float()
         
         # Perform SFC embedding & Routing
-        values, logprobs, entropies, rewards = [],[],[],[]
+        # values, logprobs, entropies, rewards = [],[],[],[]
         stop_flag = 0
         mov = 0
         this_episode_rwd = 0
@@ -529,12 +536,13 @@ class A3CWorker(mp.Process):
             action_dist = torch.distributions.Categorical(probs=action_probs.view(-1))
 
             # sample an action from the action distribution
-            action_raw = action_dist.sample() # a tensor
-            # if self.is_train:
-            #     # sample an action from the action distribution
-            #     action_raw = action_dist.sample() # a tensor
-            # else:
-            #     action_raw = torch.argmax(action_probs)
+            # action_raw = action_dist.sample() # a tensor
+            if self.is_train:
+                # sample an action from the action distribution
+                action_raw = action_dist.sample()
+            else:
+                # get the action associated with highest prob
+                action_raw = torch.argmax(action_probs)
             # print(f"action_raw = {action_raw}")
 
             # Calculate log_prob
@@ -602,7 +610,7 @@ class A3CWorker(mp.Process):
             if residual_delay >=0:
                 reward = self.edf.reward(action, residual_delay, proc_latency, 
                                         new_link_latency, done_embed, 
-                                        prev_node_id, prev_hol_vnf_name)
+                                        prev_node_id, prev_hol_vnf_name, delay_budget)
             else:
                 reward = -self.edf.big_reward
             # Append to reward list
@@ -710,12 +718,8 @@ class A3CWorker(mp.Process):
             v_targets_list.append(v_targets)
 
         # flatten the list into one tensor
-        # print(f"Before advs_list = {advs_list}")
         advs_list = torch.cat(advs_list, dim=0)
-        # print(f"advs_list = {advs_list}")
-        # print(f"Before v_targets_list = {v_targets_list}")
         v_targets_list = torch.cat(v_targets_list, dim=0)
-        # print(f"v_targets_list = {v_targets_list}")
         return advs_list, v_targets_list
 
     def calc_gae(self, rewards, dones, v_preds_all):
@@ -740,9 +744,10 @@ class A3CWorker(mp.Process):
         "Calculate advantages from the batch of episodes' experiences using GAE"
         advs_list, v_targets_list = [], []
         for epi in range(self.train_freq):
-            advs, v_targets = [], []
+            advs, v_targets, v_preds_all = [], [], []
             cur_epi_data = {k: batch[k][epi] for k in self.memory.data_keys}
             next_v_pred = cur_epi_data['last_returns'][-1] #G
+            next_v_pred = torch.from_numpy(np.array([next_v_pred]))
             v_preds = [item.detach() for item in cur_epi_data['v_preds']]# adv does not accumulate gradient
             v_preds = torch.from_numpy(np.array(v_preds))# convert to a new tensor
             # Calculate GAE return
@@ -753,9 +758,9 @@ class A3CWorker(mp.Process):
             advs_list.append(advs)
         
         # flatten the list into one tensor
-        advs_list = torch.stack(advs_list, dim=0)
+        advs_list = torch.cat(advs_list, dim=0)
         advs_list = self.standardize(advs_list)
-        v_targets_list = torch.stack(v_targets_list, dim=0)
+        v_targets_list = torch.cat(v_targets_list, dim=0)
         return advs_list, v_targets_list
 
 
@@ -780,14 +785,12 @@ class A3CWorker(mp.Process):
         x = {k: [] for k in self.memory.data_keys}
         for k in self.memory.data_keys:
             for epi in range(self.train_freq):
-                # print(f"batch[{k}][{epi}] = {batch[k][epi]}")
                 if torch.is_tensor(batch[k][epi][0]):
                     temp = batch[k][epi]
                     x[k].append(torch.stack(temp, dim=0).view(-1))
                 else:
                     temp = np.array(batch[k][epi])
                     x[k].append(torch.from_numpy(temp.astype(np.float32)))
-            # print(f"x[{k}] = {x[k]}")
         return x
 
     def update_params_batch(self):
@@ -805,7 +808,8 @@ class A3CWorker(mp.Process):
         """
         batch = self.memory.sample()
         batch = self.to_torch_batch(batch)
-        advs_list, v_targets_list = self.calc_advs_v_targets(batch)
+        # Calculate the advatanges and v_targets
+        advs_list, v_targets_list = self.calc_advs_v_targets(batch) # depending on the setting, this fn will be n-step return Or GAE
         actor_loss = self.calc_policy_loss(batch, advs_list)
         critic_loss = self.calc_critic_loss(batch, v_targets_list)
         loss = actor_loss + critic_loss

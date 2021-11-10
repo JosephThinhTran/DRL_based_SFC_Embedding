@@ -12,7 +12,8 @@ Implement Advantage Actor Critic (A2C) learning main loop
     + Integrate LSTM/GRU cell into the shared_net_AC model
     
 """
-
+import os
+os.environ['OMP_NUM_THREADS'] = '2' # 2 thread per CPU core for numpy
 import numpy as np
 import torch
 import torch.multiprocessing as mp
@@ -23,7 +24,6 @@ from matplotlib import pylab as plt
 from actor_critic_models_SFC_v05 import ACNet, A3CWorker, SharedAdam, SharedRMSProp
 from edf_env_A3C_v2_02 import EdfEnv
 from data_utils_A3C_02 import retrieve_sfc_req_from_json, mov_window_avg
-import os
 from datetime import datetime
 from pathlib import Path
 import json
@@ -31,6 +31,9 @@ import shutil
 
 
 def read_reward_data(log_file):
+    '''Read data from multiple sub-files in log_file
+        Return a list where each sub-list contains data from each sub-file
+    '''
     data = []
     for f in log_file:
         with open(f, 'r') as fp:
@@ -56,6 +59,18 @@ def read_loss_data(log_files):
         data.append(vals)
     return np.array(data) 
 
+def read_accept_ratio_data(log_file):
+    '''Read data from multiple sub-files in log_file
+        Return a list where each sub-list contains data from each sub-file
+    '''
+    data = []
+    for f in log_file:
+        with open(f, 'r') as fp:
+            lines = fp.readlines()
+        vals = [float(l) for l in lines[:-1]] # do not read the last line
+        data.append(vals)
+    return np.array(data)
+
 
 def worker(a3c_worker, g_counter):
     a3c_worker.run(g_counter)
@@ -77,11 +92,14 @@ def main(is_train, network_arch, adv_style):
     # is_train = OPERATION_MODE["test_mode"]
     
     #### Training parameters
-    N_EPOCHS = 500_000 if not IS_CONTINUE_TRAINING else 500_000
+    N_EPOCHS = 200_000 if not IS_CONTINUE_TRAINING else 200_000
     N_STEPS = 15 # N-step training for actor-critic, N-step=0 --> use Monte-Carlo sampling
     MAX_MOVE = 25 # Max number of steps per episode
-    N_CPUS = 1#int(mp.cpu_count()/2)
-    TRAIN_FREQ = 25 # Num of episode per training
+    TRAIN_FREQ = 5 # Num of episode per training
+    if is_train == OPERATION_MODE["train_mode"]:
+        N_WORKERS = 12 #int(mp.cpu_count()/2)
+    else:
+        N_WORKERS = 1
     
     #### Create Model Folder 
     MODEL_NAME = "AC_Agent"
@@ -149,21 +167,27 @@ def main(is_train, network_arch, adv_style):
                          'l2': L_COMMON_2}
     
     #### Learning parameters
-    GAMMA = 0.99
+    GAMMA = 0.88
     TAU = 1.0
     LEARNING_RATE = 1e-3
     ACTOR_FACTOR = 1
-    CRITIC_FACTOR = 1
-    ENTROPY_FACTOR = 0.01
+    CRITIC_FACTOR = 0.25
+    ENTROPY_FACTOR = 0.1
+    ENTROPY_DECAY_VAL = 0.01
+    ENTROPY_DECAY_FREQ = 12_000
+    ENTROPY_MIN = 0.01
 
     #### RMSProp's parameters
+    RMS_LR = 5e-4
     RMS_EPSILON = 1e-5
     RMS_WEIGHT_DECAY = 0
     RMS_ALPHA = 0.99
-    RMS_MOMENTUM = 0.0
+    RMS_MOMENTUM = 0.2
     RMS_CENTERED = False
 
-    
+    #### Cost factors
+    BETAS = [1.5, 25, 15, 0.5]
+    BIG_RWD = 3.0
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
 
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
@@ -200,30 +224,38 @@ def main(is_train, network_arch, adv_style):
             print(f"FC_CRITIC_1 = {L_COMMON_1}, FC_CRITIC_2 = {L_COMMON_2}", file=fp)
         # print(f"FC_HID_LAYERS  = {FC_HID_LAYERS}", file=fp)
         
-        print("LEARNING PARAMETERS", file=fp)
+        print("\nLearning parameters", file=fp)
         print(f"GAMMA = {GAMMA}", file=fp)
         print(f"TAU = {TAU}", file=fp)
         print(f"LEARNING_RATE = {LEARNING_RATE}", file=fp)
         print(f"CRITIC_FACTOR = {CRITIC_FACTOR}", file=fp)
         print(f"ACTOR_FACTOR = {ACTOR_FACTOR}", file=fp)
         print(f"ENTROPY_FACTOR = {ENTROPY_FACTOR}", file=fp)
+        print(f"ENTROPY_DECAY_VAL = {ENTROPY_DECAY_VAL}", file=fp)
+        print(f"ENTROPY_DECAY_FREQ = {ENTROPY_DECAY_FREQ}", file=fp)
+        print(f"ENTROPY_MIN = {ENTROPY_MIN}", file=fp)
 
-        print("Optimizer parameters", file=fp)
-        print(f"Opt_Learning_Rate = {LEARNING_RATE}", file=fp)
+        print("\nOptimizer parameters", file=fp)
+        print(f"Opt_Learning_Rate = {RMS_LR}", file=fp)
         print(f"Opt_Epsilon = {RMS_EPSILON}", file=fp)
         print(f"Opt_Weight_Decay = {RMS_WEIGHT_DECAY}", file=fp)
         print(f"Opt_Alpha = {RMS_ALPHA}", file=fp)
         print(f"Opt_Momentum = {RMS_MOMENTUM}", file=fp)
         print(f"Opt_Centered = {RMS_CENTERED}", file=fp)
         
+        print("\nCost factors betas", file=fp)
+        print(f"BETAS = {BETAS}", file=fp)
+        print(f"Big_Reward = {BIG_RWD}", file=fp)
+
         if OPERATION_MODE["train_mode"]:
-            print("Training parameters", file=fp)
+            print("\nTraining parameters", file=fp)
+            print(f"N_WORKERS = {N_WORKERS}", file=fp)
             print(f"N_EPOCHS = {N_EPOCHS}", file=fp)
             print(f"TRAIN_FREQ = {TRAIN_FREQ}", file=fp)
             if adv_style == ADV_STYLE['n_step_return']:
-                print(f"ADVANTAGE_STYLE = N_step return")
+                print("ADVANTAGE_STYLE = N_step return", file=fp)
             elif adv_style == ADV_STYLE['gae']:
-                print(f"ADVANTAGE_STYLE = GAE")
+                print(f"ADVANTAGE_STYLE = GAE", file=fp)
 
            
     print("Export system parameter setting into text files ... DONE!")
@@ -243,7 +275,8 @@ def main(is_train, network_arch, adv_style):
         print(f"Model directory: = {MODEL_DIR}")
         print(f"Model name: {MODEL_NAME}")
     else:
-        print("TRAINING THE NEURAL NETWORK FROM SCRATCH!")
+        if is_train == OPERATION_MODE["train_mode"]:
+            print("TRAINING THE NEURAL NETWORK FROM SCRATCH!")
     
         
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
@@ -252,8 +285,9 @@ def main(is_train, network_arch, adv_style):
     
     # {'net_topo' : "ibm_200000_slots_1_con.net",
     #                  'traffic' : "reordered_traffic_200000_slots_1_con.tra"},
-    train_dataset_list = [{'net_topo' : "ibm_500000_slots_1_con.net",
-                     'traffic' : "reordered_traffic_500000_slots_1_con.tra"},
+    train_dataset_list = [
+                    {'net_topo' : "ibm_200000_slots_1_con.net",
+                     'traffic' : "reordered_traffic_200000_slots_1_con.tra"},
                     \
                     {'net_topo' : "ibm_200000_slots_1_con_2021-September-21__16-06-04.net",
                      'traffic' : "reordered_traffic_200000_slots_1_con_2021-September-21__16-06-04.tra"},
@@ -268,7 +302,25 @@ def main(is_train, network_arch, adv_style):
                      'traffic': "reordered_traffic_200000_slots_1_con_2021-September-21__16-08-42.tra"},
                     \
                     {'net_topo' : "ibm_200000_slots_1_con_2021-September-21__16-09-30.net",
-                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-September-21__16-09-30.tra"}
+                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-September-21__16-09-30.tra"},
+                     \
+                    {'net_topo' : "ibm_200000_slots_1_con_2021-November-06__00-24-34.net",
+                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-24-34.tra"},
+                     \
+                    {'net_topo' : "ibm_200000_slots_1_con_2021-November-06__00-24-55.net",
+                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-24-55.tra"},
+                     \
+                    {'net_topo' : "ibm_200000_slots_1_con_2021-November-06__00-25-28.net",
+                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-25-28.tra"},
+                     \
+                    {'net_topo' : "ibm_200000_slots_1_con_2021-November-06__00-25-55.net",
+                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-25-55.tra"},
+                     \
+                    {'net_topo' : "ibm_200000_slots_1_con_2021-November-06__00-27-07.net",
+                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-27-07.tra"},
+                     \
+                     {'net_topo' : "ibm_200000_slots_1_con_2021-November-06__00-27-36.net",
+                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-27-36.tra"}
                     ]
     
     test_dataset_list = [{"net_topo": "ibm_15000_slots_1_con.net",
@@ -277,9 +329,40 @@ def main(is_train, network_arch, adv_style):
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
 
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
+    ''' Prepare the traffic request datasets '''
+    """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
+    print("Preparing traffic request datasets")
+    all_req_lists = []
+    all_n_reqs = []
+    #### TODO: implement it in parallel in the future
+    if is_train == OPERATION_MODE["train_mode"]:
+        for idx in range(N_WORKERS):
+            req_json_file = os.path.join(DATA_FOLDER, train_dataset_list[idx]['traffic'])
+            n_req, req_list = retrieve_sfc_req_from_json(req_json_file)
+            print(f"Dataset {idx+1} is ")
+            print(f"{train_dataset_list[idx]['net_topo']}")
+            print(f"{train_dataset_list[idx]['traffic']}")
+            print(f"Dataset {idx+1} has {len(req_list)} requests")
+            all_n_reqs.append(n_req)
+            all_req_lists.append(req_list)
+    else:
+        for idx in range(N_WORKERS):
+            req_json_file = os.path.join(DATA_FOLDER, test_dataset_list[idx]['traffic'])
+            n_req, req_list = retrieve_sfc_req_from_json(req_json_file)
+            print(f"Dataset {idx+1} is ")
+            print(f"{test_dataset_list[idx]['net_topo']}")
+            print(f"{test_dataset_list[idx]['traffic']}")
+            print(f"Dataset {idx+1} has {len(req_list)} requests")
+            all_n_reqs.append(n_req)
+            all_req_lists.append(req_list)
+
+    """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
     #### Training & Testing params
-    train_params = {'epochs': N_EPOCHS,
-                    'n_workers': N_CPUS,
+    max_epochs = min([N_EPOCHS,] * N_WORKERS, all_n_reqs)
+    print(f"max_epochs = {max_epochs}")
+
+    train_params = {'epochs': max_epochs,
+                    'n_workers': N_WORKERS,
                     'sfc_spec': sfc_spec_file,
                     'datasets': train_dataset_list,
                     'data_folder': DATA_FOLDER,
@@ -297,11 +380,17 @@ def main(is_train, network_arch, adv_style):
                     'critic_factor': CRITIC_FACTOR,
                     'actor_factor': ACTOR_FACTOR,
                     'entropy_factor': ENTROPY_FACTOR,
+                    'entropy_decay_val': ENTROPY_DECAY_VAL,
+                    'entropy_decay_freq': ENTROPY_DECAY_FREQ,
+                    'entropy_min': ENTROPY_MIN,
+                    'betas': BETAS,
+                    'big_rwd': BIG_RWD,
                     'N_steps': N_STEPS,
                     'max_moves': MAX_MOVE,
                     'resource_scaler': RESOURCE_SCALER,
                     'is_binary_state': IS_BINARY_STATE,
                     'state_noise_scale': STATE_NOISE_SCALE,
+                    'opt_lr': RMS_LR,
                     'opt_epsilon': RMS_EPSILON,
                     'opt_weight_decay': RMS_WEIGHT_DECAY,
                     'opt_alpha': RMS_ALPHA,
@@ -309,8 +398,8 @@ def main(is_train, network_arch, adv_style):
                     'opt_centered': RMS_CENTERED
                     }
     
-    test_params = {'epochs': 15_000,
-                    'n_workers': N_CPUS,
+    test_params = {'epochs': min([N_EPOCHS,]*N_WORKERS, all_n_reqs),
+                    'n_workers': N_WORKERS,
                     'sfc_spec': sfc_spec_file,
                     'datasets': test_dataset_list,
                     'data_folder': DATA_FOLDER,
@@ -328,47 +417,24 @@ def main(is_train, network_arch, adv_style):
                     'critic_factor': CRITIC_FACTOR,
                     'actor_factor': ACTOR_FACTOR,
                     'entropy_factor': ENTROPY_FACTOR,
+                    'entropy_factor': ENTROPY_FACTOR,
+                    'entropy_decay_val': ENTROPY_DECAY_VAL,
+                    'entropy_decay_freq': ENTROPY_DECAY_FREQ,
+                    'entropy_min': ENTROPY_MIN,
+                    'betas': BETAS,
+                    'big_rwd': BIG_RWD,
                     'N_steps': N_STEPS,
                     'max_moves': MAX_MOVE,
                     'resource_scaler': RESOURCE_SCALER,
                     'is_binary_state': IS_BINARY_STATE,
                     'state_noise_scale': STATE_NOISE_SCALE,
+                    'opt_lr': RMS_LR,
                     'opt_epsilon': RMS_EPSILON,
                     'opt_weight_decay': RMS_WEIGHT_DECAY,
                     'opt_alpha': RMS_ALPHA,
                     'opt_momentum': RMS_MOMENTUM,
                     'opt_centered': RMS_CENTERED
-                    }
-    
-
-    """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
-    ''' Prepare the traffic request datasets '''
-    """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
-    print("Preparing traffic request datasets")
-    all_req_lists = []
-    all_n_reqs = []
-    #### TODO: implement it in parallel in the future
-    if is_train == OPERATION_MODE["train_mode"]:
-        for idx in range(train_params['n_workers']):
-            req_json_file = os.path.join(DATA_FOLDER, train_dataset_list[idx]['traffic'])
-            n_req, req_list = retrieve_sfc_req_from_json(req_json_file)
-            print(f"Dataset {idx+1} is ")
-            print(f"{train_dataset_list[idx]['net_topo']}")
-            print(f"{train_dataset_list[idx]['traffic']}")
-            print(f"Dataset {idx+1} has {len(req_list)} requests")
-            all_n_reqs.append(n_req)
-            all_req_lists.append(req_list)
-    else:
-        for idx in range(train_params['n_workers']):
-            req_json_file = os.path.join(DATA_FOLDER, test_dataset_list[idx]['traffic'])
-            n_req, req_list = retrieve_sfc_req_from_json(req_json_file)
-            print(f"Dataset {idx+1} is ")
-            print(f"{test_dataset_list[idx]['net_topo']}")
-            print(f"{test_dataset_list[idx]['traffic']}")
-            print(f"Dataset {idx+1} has {len(req_list)} requests")
-            all_n_reqs.append(n_req)
-            all_req_lists.append(req_list)
-        
+                    }        
 
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
     ''' A3C_Worker's task '''
@@ -382,13 +448,12 @@ def main(is_train, network_arch, adv_style):
 
     Global_Model.load_state_dict(Before_Train_Model.state_dict())
 
-    # os.environ['OMP_NUM_THREADS'] = '1' # 1 thread per CPU core
     #### Training mode
     if is_train == OPERATION_MODE["train_mode"]:
         print("Training the A3C RL-agent")
         # the model's parameters are globally shared among processes
         Global_Model.share_memory()
-        global_optimizer = SharedRMSProp(Global_Model.parameters(), lr=LEARNING_RATE,
+        global_optimizer = SharedRMSProp(Global_Model.parameters(), lr=RMS_LR,
                                         eps=RMS_EPSILON, weight_decay=RMS_WEIGHT_DECAY,
                                         alpha=RMS_ALPHA, momentum=RMS_MOMENTUM, centered=RMS_CENTERED)
         # global_optimizer = SharedAdam(Global_Model.parameters(), lr=train_params['learning_rate'])
@@ -444,6 +509,7 @@ def main(is_train, network_arch, adv_style):
         src_file = os.path.join(full_path, MODEL_NAME + '.pt')
         shutil.copy2(src_file, TRAIN_DIR)
 
+
         #### Plotting results #######################################################################
         print("Plotting some results")
         # Get the names of reward_log and loss_log files
@@ -469,7 +535,6 @@ def main(is_train, network_arch, adv_style):
         fig_name = os.path.join(train_params['train_dir'], fig_name)
         plt.savefig(fig_name)
 
-
         ''' Plot loss values'''
         # Read loss_log file data
         loss_log_data = read_loss_data(loss_logs)
@@ -483,8 +548,9 @@ def main(is_train, network_arch, adv_style):
         plt.plot(mov_avg_loss, color='tab:orange')
         plt.plot(loss_log_data.mean(axis=1), color='b')
         fig_name = "Avg_Train_Loss_" + now.strftime("%Y-%B-%d__%H-%M")
-        fig_name = os.path.join(train_params['train_dir'], fig_name)   
+        fig_name = os.path.join(train_params['train_dir'], fig_name)
         plt.savefig(fig_name)
+
         #############################################################################################
 
     #### Testing mode
@@ -516,11 +582,48 @@ def main(is_train, network_arch, adv_style):
 
     #############################################################################################
 
-    # Check Global_Model vs. Before_Train_Model
+    ''' Plot accum_n_accepted_req over epochs'''
+    # Read accept_ratio.log files
+    ar_logs = []
+    for w in range(N_WORKERS):
+        if is_train == OPERATION_MODE["train_mode"]:
+            fp = os.path.join(train_params['train_dir'], 'W_' + str(w) + "_accept_ratio.log")
+        else:
+            fp = os.path.join(train_params['test_dir'], 'W_' + str(w) + "_test_accept_ratio.log")
+        ar_logs.append(fp)
+    ar_log_datas = read_accept_ratio_data(ar_logs)
+    # Accumulate n_accepted requests
+    accum_accept_reqs = []
+    for f in ar_log_datas:
+        accum_count = 0
+        counts = np.zeros(len(f))
+        for i in range(len(f)):
+            counts[i] = accum_count = f[i] + accum_count
+        accum_accept_reqs.append(counts)
+    legs = ['W_' + str(i) for i in range(N_WORKERS)]
+    colors = ['r', 'g', 'b', 'c', 'm', 'y', 'k', 'orange', 'fuchsia', 'teal', 'lime', 'pink']
+    plt.figure(figsize=(10,7.5))
+    plt.grid()
+    plt.title("Accumulated accepted request over epochs")
+    plt.xlabel("Epochs",fontsize=22)
+    plt.ylabel("Num. of requests",fontsize=22)
+    [plt.plot(accum_accept_reqs[i], color=colors[i]) for i in range(N_WORKERS)]
+    plt.legend(legs)
+    if is_train == OPERATION_MODE["train_mode"]:
+        fig_name = os.path.join(train_params['train_dir'], 
+                                "Train_Accum_Accept_Reqs_" + now.strftime("%Y-%B-%d__%H-%M"))   
+    else:
+        fig_name = os.path.join(train_params['test_dir'], 
+                                "Test_Accum_Accept_Reqs_" + now.strftime("%Y-%B-%d__%H-%M"))
+    plt.savefig(fig_name)
+
+    # Print the avg acceptance ratio 
+    print(f"Average request acceptance ratio of {N_WORKERS} workers = {np.mean(ar_log_datas)*100}%")
+
+    ''' Check Global_Model vs. Before_Train_Model'''
     print("Return the Before_Train and After_Train models")
     return Before_Train_Model, Global_Model
-
-    """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
+#############################################################################################
 
 #### Show model's weights
 def get_model_weights(model):
@@ -539,23 +642,12 @@ def diff_weights(model1, model2):
         diffs[key] = w1[key] - w2[key]
     return diffs, w1, w2
     
-        
-    
-#### Run the script
-if __name__ == "__main__":
-    OPERATION_MODE = {'train_mode': 1, 'test_mode': 0}
-    NET_ARCH = {'shared_net': 1, 'shared_net_w_RNN':2, 'separated_net':3}
-    ADV_STYLE = {'n_step_return': 1, 'gae': 2}# n-step return or GAE
-    
-    # Choose neural network architecture
-    network_arch = NET_ARCH['shared_net_w_RNN']
-    operating_mode = OPERATION_MODE['test_mode']
-    adv_style = ADV_STYLE['n_step_return']
+#############################################################################################
 
-    Before_Model, After_Model = main(operating_mode, network_arch, adv_style)
-    
-    diff, before_weights, after_weights = diff_weights(Before_Model, After_Model)
-    if network_arch == NET_ARCH['shared_net']:
+def calc_model_diff(before_model, after_model, net_arch):
+    NET_ARCH = {'shared_net': 1, 'shared_net_w_RNN':2, 'separated_net':3}
+    diff, before_weights, after_weights = diff_weights(before_model, after_model)
+    if net_arch == NET_ARCH['shared_net']:
         diff1 = np.sum(np.sqrt(diff['fc1.weight']**2)) + np.sum(np.sqrt(diff['fc1.bias']**2))
         diff2 = np.sum(np.sqrt(diff['fc2.weight']**2)) + np.sum(np.sqrt(diff['fc2.bias']**2))
         diff3 = np.sum(np.sqrt(diff['fc3.weight']**2)) + np.sum(np.sqrt(diff['fc3.bias']**2))
@@ -567,11 +659,11 @@ if __name__ == "__main__":
         print(f"diff fc3 = {diff3}")
         print(f"diff actor_lin1 = {diff_actor_lin}")
         print(f"diff critic_lin1 = {diff_critic_lin}")
-    elif network_arch == NET_ARCH['shared_net_w_RNN']:
+    elif net_arch == NET_ARCH['shared_net_w_RNN']:
         # TODO: implement diff
         pass
 
-    elif network_arch == NET_ARCH['separated_net']:
+    elif net_arch == NET_ARCH['separated_net']:
         # Actor
         a_diff1 = np.sum(np.sqrt(diff['actor_fc1.weight']**2)) + np.sum(np.sqrt(diff['actor_fc1.bias']**2))
         a_diff2 = np.sum(np.sqrt(diff['actor_fc2.weight']**2)) + np.sum(np.sqrt(diff['actor_fc2.bias']**2))
@@ -583,5 +675,17 @@ if __name__ == "__main__":
     else:
         print("Network architect not supported!")
 
+#### Run the script
+if __name__ == "__main__":
+    OPERATION_MODE = {'train_mode': 1, 'test_mode': 0}
+    NET_ARCH = {'shared_net': 1, 'shared_net_w_RNN':2, 'separated_net':3}
+    ADV_STYLE = {'n_step_return': 1, 'gae': 2}# n-step return or GAE
+    
+    # Train/Test Settings
+    network_arch = NET_ARCH['shared_net']
+    operating_mode = OPERATION_MODE['train_mode']
+    adv_style = ADV_STYLE['n_step_return']
 
+    Before_Model, After_Model = main(operating_mode, network_arch, adv_style)
+    calc_model_diff(Before_Model, After_Model, network_arch)
 

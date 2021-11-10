@@ -27,7 +27,8 @@ from collections import namedtuple
 
 class EdfEnv(object):
     ''' EDF network environment'''
-    def __init__(self, data_path, net_file='ibm.net', sfc_file='sfc_file.sfc', resource_scaler=1.):
+    def __init__(self, data_path, net_file='ibm.net', sfc_file='sfc_file.sfc', 
+                resource_scaler=1., betas=[1, 25, 15, 0.5], big_rwd=3.0):
         ''' Initialize the EDF environment
         
         Parameters:
@@ -69,14 +70,16 @@ class EdfEnv(object):
         # Largest link delays
         self.largest_link_delay = max([self.net_topo.edges[l]['delay'] for l in self.net_topo.edges])
         
-        self.big_reward = 3.0
+        # Big reward constant
+        self.big_reward = big_rwd
+        # Cost factors for the new dataset
+        self.beta0 = betas[0] # bonus
+        self.beta1 = betas[1] # new link latency
+        self.beta2 = betas[2] # processing latency
+        self.beta3 = betas[3] # E2E delay budget consumption
         # Old cost factors
         # beta1 = 0.01
         # beta2 = 0.001
-        
-        # Cost factors for the new dataset
-        self.beta1 = 25.0
-        self.beta2 = 15.0
 
         print('Init EDF environment...done!')
     
@@ -284,7 +287,7 @@ class EdfEnv(object):
     
     
     def reward(self, real_action, residual_delay, proc_latency, 
-               new_link_latency, done_embed, prev_node_id, prev_hol_vnf_name):
+               new_link_latency, done_embed, prev_node_id, prev_hol_vnf_name, delay_budget):
         ''' Calculate the reward, given the EDF's state and current action
         
         Parameters:
@@ -298,27 +301,23 @@ class EdfEnv(object):
             new_link_latency: float
                 LATENCY OF THE NEWLY ADDED LINK
             done_embed: int (0,1)
-                INDICATE THE COMPLETENESS OF THE SFC EMBEDDING
-            
+                INDICATE THE COMPLETENESS OF THE SFC EMBEDDING 
+            prev_node_id: int
+                ID OF THE PREVIOUS NODE
+            prev_hol_vnf_name: string
+                NAME OF THE PREVIOUS HoL VNF
+            delay_budget: float
+                E2E DELAY CONSTRAINT OF THE REQUEST
         '''
-        # big_reward = 3.
-        # Old cost factors
-        # beta1 = 0.01
-        # beta2 = 0.001
-        
-        # Cost factors for the new dataset
-        # beta1 = 25.
-        # beta2 = 15.
-        
         # Bonus from VNF embedding
-        # cost due to additional link delay
+        delay_usage_pct = (delay_budget - residual_delay) / delay_budget
+        # cost due to additional link delay and processing delay
         if proc_latency > 0:
-            bonus = 1.0
-            cost = self.beta2 * proc_latency + self.beta1 * new_link_latency
-            # cost = beta2 * proc_latency + beta1 * new_link_latency
+            bonus = self.beta0
+            cost = self.beta1 * new_link_latency + self.beta2 * proc_latency + self.beta3 * delay_usage_pct
         else:
             bonus = 0
-            cost = self.beta1 * new_link_latency
+            cost = self.beta1 * new_link_latency + self.beta3 * delay_usage_pct
         
         # Check vnf supporting when real_action.is_embed=1
         if real_action['is_embed'] > 0:
