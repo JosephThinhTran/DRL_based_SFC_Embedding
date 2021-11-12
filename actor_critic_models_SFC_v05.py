@@ -175,9 +175,8 @@ class ACNet(torch.nn.Module):
             y = F.relu(self.fc2(y))
             
             # Actor head
-            # actor_vec = F.log_softmax(self.actor_lin1(y), dim=0)
-            # actor_vec = self.actor_lin1(y)
-            actor_vec = F.softmax(self.actor_lin1(y), dim=1)
+            actor_vec = self.actor_lin1(y) # logit vector
+            # actor_vec = F.softmax(self.actor_lin1(y), dim=1) # prob. dist. vector
             
             # Critic head
             # z = F.relu(self.fc3(y.detach())) #detach y before feeding to z; do not backpropagate loss from critic head to the fc1 and fc2 layers
@@ -522,27 +521,35 @@ class A3CWorker(mp.Process):
             self.total_iters += 1
             mov += 1
             
-            #### Obtain action_probs and value, given the current state
+            #### Obtain action_values and value, given the current state
             if self.net_arch != self.worker_model.NET_ARCH['shared_net_w_RNN']:
-                action_probs, critic_value = self.worker_model(state1) # worker_model.forward(state)
+                action_values, critic_value = self.worker_model(state1) # worker_model.forward(state)
             else:
-                action_probs, critic_value, hx = self.worker_model(state1, hx) # worker_model.forward(state, hx)
+                action_values, critic_value, hx = self.worker_model(state1, hx) # worker_model.forward(state, hx)
                 # print(f"hx = {hx}")
             # print(f"critic_value = {critic_value}")
-            # print(f"action_probs = {action_probs}")
+            # print(f"action_values = {action_values}")
             # values.append(critic_value)
             
             #### Apply action to the env
-            action_dist = torch.distributions.Categorical(probs=action_probs.view(-1))
+            # Mask out the unconnected-neighbors of cur_node_id
+            inv_adj = np.tile(self.edf.adj_mat[cur_node_id], 2) # duplicate this array
+            inv_adj = (1.0 - inv_adj) * (-1e6)
+            inv_adj = torch.from_numpy(np.array([inv_adj]))
+            masked_action_logits = action_values + inv_adj
+            # Transform to prob. dist.
+            masked_action_probs = F.softmax(masked_action_logits, dim=1)
+            action_dist = torch.distributions.Categorical(probs=masked_action_probs.view(-1))
+            # action_dist = torch.distributions.Categorical(probs=action_values.view(-1))
 
             # sample an action from the action distribution
-            # action_raw = action_dist.sample() # a tensor
-            if self.is_train:
-                # sample an action from the action distribution
-                action_raw = action_dist.sample()
-            else:
-                # get the action associated with highest prob
-                action_raw = torch.argmax(action_probs)
+            action_raw = action_dist.sample() # a tensor
+            # if self.is_train:
+            #     # sample an action from the action distribution
+            #     action_raw = action_dist.sample()
+            # else:
+            #     # get the action associated with highest prob
+            #     action_raw = torch.argmax(action_values)
             # print(f"action_raw = {action_raw}")
 
             # Calculate log_prob
@@ -551,7 +558,7 @@ class A3CWorker(mp.Process):
             # print(f"{log_prob_action}")
 
             # Calculate entropy
-            # entropy = -(logprob_dist * action_probs).sum(1)
+            # entropy = -(logprob_dist * action_values).sum(1)
             entropy = action_dist.entropy()
             # entropies.append(entropy)
 
