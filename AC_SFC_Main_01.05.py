@@ -97,7 +97,7 @@ def main(is_train, network_arch, adv_style):
     MAX_MOVE = 25 # Max number of steps per episode
     TRAIN_FREQ = 5 # Num of episode per training
     if is_train == OPERATION_MODE["train_mode"]:
-        N_WORKERS = 12 #int(mp.cpu_count()/2)
+        N_WORKERS = 12 #mp.cpu_count()
     else:
         N_WORKERS = 1
     
@@ -186,7 +186,8 @@ def main(is_train, network_arch, adv_style):
     RMS_CENTERED = False
 
     #### Cost factors
-    BETAS = [1.5, 25, 15, 0.5]
+    # BETAS = [1.5, 25, 15, 0.5] # used with New reward function
+    BETAS = [1.0, 25, 15, 0.0] # used with Old reward function
     BIG_RWD = 3.0
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
 
@@ -323,8 +324,10 @@ def main(is_train, network_arch, adv_style):
                      'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-27-36.tra"}
                     ]
     
-    test_dataset_list = [{"net_topo": "ibm_15000_slots_1_con.net",
-                           "traffic": "reordered_traffic_15000_slots_1_con.tra"}]
+    # test_dataset_list = [{"net_topo": "ibm_15000_slots_1_con.net",
+    #                        "traffic": "reordered_traffic_15000_slots_1_con.tra"}]
+    test_dataset_list = [{"net_topo": "ibm_100000_slots_1_con.net",
+                           "traffic": "reordered_traffic_100000_slots_1_con.tra"}]
 
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
 
@@ -683,7 +686,7 @@ if __name__ == "__main__":
     
     # Train/Test Settings
     network_arch = NET_ARCH['shared_net']
-    operating_mode = OPERATION_MODE['train_mode']
+    operating_mode = OPERATION_MODE['test_mode']
     adv_style = ADV_STYLE['n_step_return']
 
     Before_Model, After_Model = main(operating_mode, network_arch, adv_style)
