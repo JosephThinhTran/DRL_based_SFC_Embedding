@@ -13,6 +13,8 @@ Implement Advantage Actor Critic (A2C) learning main loop
     
 """
 import os
+
+from plot_results import plot_episode_rwd
 os.environ['OMP_NUM_THREADS'] = '2' # 2 thread per CPU core for numpy
 import numpy as np
 import torch
@@ -28,6 +30,9 @@ from datetime import datetime
 from pathlib import Path
 import json
 import shutil
+import argparse
+from dataset_and_params import get_sfc_spec_file, get_train_datasets, get_test_datasets, get_train_test_params
+from plot_results import plot_episode_rwd, plot_loss_val, plot_accum_accept_req
 
 
 def read_reward_data(log_file):
@@ -75,13 +80,11 @@ def read_accept_ratio_data(log_file):
 def worker(a3c_worker, g_counter):
     a3c_worker.run(g_counter)
 
-def main(is_train, network_arch, adv_style):
+# def main(is_train, network_arch, adv_style):
+def main(args):
     ### Training Settings
-    IS_BINARY_STATE = True # Using Binary encoded state
     IS_NEIGHBOR_MASK = False# Neighborhood mask Default = False
     IS_CONTINUE_TRAINING = False # Continue training the DQN from the current DQN' weights
-    STATE_NOISE_SCALE = 100.
-    RESOURCE_SCALER = 1.0
 
     OPERATION_MODE = {'train_mode': 1, 'test_mode': 0}
     NET_ARCH = {'shared_net': 1, 'shared_net_w_RNN':2, 'separated_net':3}
@@ -92,36 +95,31 @@ def main(is_train, network_arch, adv_style):
     # is_train = OPERATION_MODE["test_mode"]
     
     #### Training parameters
-    N_EPOCHS = 200_000 if not IS_CONTINUE_TRAINING else 200_000
-    N_STEPS = 15 # N-step training for actor-critic, N-step=0 --> use Monte-Carlo sampling
-    MAX_MOVE = 25 # Max number of steps per episode
-    TRAIN_FREQ = 5 # Num of episode per training
-    if is_train == OPERATION_MODE["train_mode"]:
-        N_WORKERS = 12 #mp.cpu_count()
+    N_EPOCHS = args.epochs if not IS_CONTINUE_TRAINING else 200_000
+    if OPERATION_MODE[args.mode] == OPERATION_MODE["train_mode"]:
+        args.n_workers = args.n_workers #mp.cpu_count()
     else:
-        N_WORKERS = 1
+        args.n_workers = 1
     
     #### Create Model Folder 
-    MODEL_NAME = "AC_Agent"
-    MODEL_DIR = 'A3C_SFCE_models'
     now = datetime.now()
     # Training directory
     TRAIN_DIR = 'train_results__' + now.strftime("%Y-%B-%d__%H-%M")
-    if IS_BINARY_STATE:
+    if args.is_binary_state:
         TRAIN_DIR += "_BINARY_state"
     else:
         TRAIN_DIR += "_FRACTIONAL_state"
-    TRAIN_DIR = os.path.join(MODEL_DIR, TRAIN_DIR)
+    TRAIN_DIR = os.path.join(args.model_dir, TRAIN_DIR)
 
     # Testing directory
     TEST_DIR = 'test_results__' + now.strftime("%Y-%B-%d__%H-%M")
-    if IS_BINARY_STATE:
+    if args.is_binary_state:
         TEST_DIR += "_BINARY_state"
     else:
         TEST_DIR += "_FRACTIONAL_state"    
-    TEST_DIR = os.path.join(MODEL_DIR, TEST_DIR)
+    TEST_DIR = os.path.join(args.model_dir, TEST_DIR)
 
-    if is_train == OPERATION_MODE["train_mode"]:    
+    if OPERATION_MODE[args.mode] == OPERATION_MODE["train_mode"]:    
         Path(TRAIN_DIR).mkdir(parents=True, exist_ok=True)
     else:
         Path(TEST_DIR).mkdir(parents=True, exist_ok=True)
@@ -129,15 +127,16 @@ def main(is_train, network_arch, adv_style):
     
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
     #### Training Dataset Folder
-    DATA_FOLDER = "SOF_Data_Sets-v09\complete_data_sets"
+    # args.data_folder = "SOF_Data_Sets-v09\complete_data_sets"
+    # args.data_folder = args.data_folder
     # Create a temporary edf_env for information extraction
-    temp_edf = EdfEnv(data_path=DATA_FOLDER,
+    temp_edf = EdfEnv(data_path=args.data_folder,
                       net_file="ibm_15000_slots_1_con.net",
-                      sfc_file="sfc_file.sfc",
-                      resource_scaler=RESOURCE_SCALER)
+                      sfc_file=args.sfc_spec,
+                      resource_scaler=args.rsc_scaler)
     
     # Using Binary state or Fractional state renderer
-    if IS_BINARY_STATE:
+    if args.is_binary_state:
         temp_edf.binary_state_dim()
     else:
         temp_edf.fractional_state_dim()
@@ -153,109 +152,84 @@ def main(is_train, network_arch, adv_style):
     L_COMMON_2 = 128
     L_CRITIC_1 = 128
     L_RNN = 128
-    if network_arch == NET_ARCH['shared_net']:
-        # FC_HID_LAYERS = np.array([L_COMMON_1, L_COMMON_2, L_CRITIC_1])
+    if NET_ARCH[args.net_arch] == NET_ARCH['shared_net']:
         FC_HID_LAYERS = {'common_1': L_COMMON_1,
                          'common_2': L_COMMON_2,
                          'critic_1': L_CRITIC_1}
-    elif network_arch == NET_ARCH['shared_net_w_RNN']:
-        # FC_HID_LAYERS = np.array([L_COMMON_1, L_COMMON_2, L_RNN])
+    elif NET_ARCH[args.net_arch] == NET_ARCH['shared_net_w_RNN']:
         FC_HID_LAYERS = {'common_1': L_COMMON_1,
                          'rnn_1': L_RNN}
-    elif network_arch == NET_ARCH['separated_net']:
+    elif NET_ARCH[args.net_arch] == NET_ARCH['separated_net']:
         FC_HID_LAYERS = {'l1': L_COMMON_1,
                          'l2': L_COMMON_2}
     
-    #### Learning parameters
-    GAMMA = 0.88
-    TAU = 1.0
-    LEARNING_RATE = 1e-3
-    ACTOR_FACTOR = 1
-    CRITIC_FACTOR = 0.25
-    ENTROPY_FACTOR = 0.1
-    ENTROPY_DECAY_VAL = 0.01
-    ENTROPY_DECAY_FREQ = 12_000
-    ENTROPY_MIN = 0.01
-
-    #### RMSProp's parameters
-    RMS_LR = 5e-4
-    RMS_EPSILON = 1e-5
-    RMS_WEIGHT_DECAY = 0
-    RMS_ALPHA = 0.99
-    RMS_MOMENTUM = 0.2
-    RMS_CENTERED = False
-
-    #### Cost factors
-    # BETAS = [1.5, 25, 15, 0.5] # used with New reward function
-    BETAS = [1.0, 25, 15, 0.0] # used with Old reward function
-    BIG_RWD = 3.0
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
 
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
     #### Export the parameter setting into a file
-    if is_train == OPERATION_MODE["train_mode"]:
+    if OPERATION_MODE[args.mode] == OPERATION_MODE["train_mode"]:
         param_setting_file = os.path.join(TRAIN_DIR, "parameter_settings.txt")
     else:
         param_setting_file = os.path.join(TEST_DIR, "parameter_settings.txt")
 
     with open(param_setting_file, 'a') as fp:
         print("SYSTEM PARAMETERS", file=fp)
-        if OPERATION_MODE["train_mode"]:
+        if OPERATION_MODE[args.mode] == OPERATION_MODE["train_mode"]:
             print(f"training directory: {TRAIN_DIR} \n", file=fp)
         else:
             print(f"testing directory: {TEST_DIR} \n", file=fp)
         
-        print(f"IS_BINARY_STATE = {IS_BINARY_STATE}", file=fp)
+        print(f"args.is_binary_state = {args.is_binary_state}", file=fp)
         print(f"IS_NEIGHBOR_MASK = {IS_NEIGHBOR_MASK}", file=fp)
         print(f"IS_CONTINUE_TRAINING = {IS_CONTINUE_TRAINING}", file=fp)
-        print(f'STATE_NOISE_SCALE = {STATE_NOISE_SCALE}', file=fp)
+        print(f'args.state_noise_scale = {args.state_noise_scale}', file=fp)
         
         print("NEURAL NETWORK SETTINGS", file=fp)
         print(f"INPUT_DIMS = {INPUT_DIMS}", file=fp)
         print(f"ACTOR_OUTPUT_DIMS = {ACTOR_OUTPUT_DIMS} \n", file=fp)
-        if network_arch == NET_ARCH['shared_net']:
+        if NET_ARCH[args.net_arch] == NET_ARCH['shared_net']:
             print(f"Network Architecture = Shared_Net", file=fp)
             print(f"FC_COMMON_1 = {L_COMMON_1}, FC_COMMON_2 = {L_COMMON_2}, FC_CRITIC_1 = {L_CRITIC_1}", file=fp)
-        elif network_arch == NET_ARCH['shared_net_w_RNN']:
+        elif NET_ARCH[args.net_arch] == NET_ARCH['shared_net_w_RNN']:
             print(f"Network Architecture = Shared_Net with RNN", file=fp)
             print(f"FC_COMMON_1 = {L_COMMON_1}, RNN_CELL = {L_RNN}", file=fp)
-        elif network_arch == NET_ARCH['separated_net']:
+        elif NET_ARCH[args.net_arch] == NET_ARCH['separated_net']:
             print(f"Network Architecture = Separated_Net", file=fp)
             print(f"FC_ACTOR_1 = {L_COMMON_1}, FC_ACTOR_2 = {L_COMMON_2}", file=fp)
             print(f"FC_CRITIC_1 = {L_COMMON_1}, FC_CRITIC_2 = {L_COMMON_2}", file=fp)
         # print(f"FC_HID_LAYERS  = {FC_HID_LAYERS}", file=fp)
         
         print("\nLearning parameters", file=fp)
-        print(f"GAMMA = {GAMMA}", file=fp)
-        print(f"TAU = {TAU}", file=fp)
-        print(f"LEARNING_RATE = {LEARNING_RATE}", file=fp)
-        print(f"CRITIC_FACTOR = {CRITIC_FACTOR}", file=fp)
-        print(f"ACTOR_FACTOR = {ACTOR_FACTOR}", file=fp)
-        print(f"ENTROPY_FACTOR = {ENTROPY_FACTOR}", file=fp)
-        print(f"ENTROPY_DECAY_VAL = {ENTROPY_DECAY_VAL}", file=fp)
-        print(f"ENTROPY_DECAY_FREQ = {ENTROPY_DECAY_FREQ}", file=fp)
-        print(f"ENTROPY_MIN = {ENTROPY_MIN}", file=fp)
+        print(f"args.gamma = {args.gamma}", file=fp)
+        print(f"args.tau = {args.tau}", file=fp)
+        print(f"args.lr = {args.lr}", file=fp)
+        print(f"args.critic_factor = {args.critic_factor}", file=fp)
+        print(f"args.actor_factor = {args.actor_factor}", file=fp)
+        print(f"args.entropy_factor = {args.entropy_factor}", file=fp)
+        print(f"args.entropy_decay_val = {args.entropy_decay_val}", file=fp)
+        print(f"args.entropy_decay_freq = {args.entropy_decay_freq}", file=fp)
+        print(f"args.entropy_min = {args.entropy_min}", file=fp)
 
         print("\nOptimizer parameters", file=fp)
-        print(f"Opt_Learning_Rate = {RMS_LR}", file=fp)
-        print(f"Opt_Epsilon = {RMS_EPSILON}", file=fp)
-        print(f"Opt_Weight_Decay = {RMS_WEIGHT_DECAY}", file=fp)
-        print(f"Opt_Alpha = {RMS_ALPHA}", file=fp)
-        print(f"Opt_Momentum = {RMS_MOMENTUM}", file=fp)
-        print(f"Opt_Centered = {RMS_CENTERED}", file=fp)
+        print(f"Opt_Learning_Rate = {args.opt_lr}", file=fp)
+        print(f"Opt_Epsilon = {args.opt_epsilon}", file=fp)
+        print(f"Opt_Weight_Decay = {args.opt_weight_decay}", file=fp)
+        print(f"Opt_Alpha = {args.opt_alpha}", file=fp)
+        print(f"Opt_Momentum = {args.opt_momentum}", file=fp)
+        print(f"Opt_Centered = {args.opt_centered}", file=fp)
         
         print("\nCost factors betas", file=fp)
-        print(f"BETAS = {BETAS}", file=fp)
-        print(f"Big_Reward = {BIG_RWD}", file=fp)
+        print(f"args.betas = {args.betas}", file=fp)
+        print(f"Big_Reward = {args.big_rwd}", file=fp)
 
         if OPERATION_MODE["train_mode"]:
             print("\nTraining parameters", file=fp)
-            print(f"N_WORKERS = {N_WORKERS}", file=fp)
+            print(f"args.n_workers = {args.n_workers}", file=fp)
             print(f"N_EPOCHS = {N_EPOCHS}", file=fp)
-            print(f"TRAIN_FREQ = {TRAIN_FREQ}", file=fp)
-            if adv_style == ADV_STYLE['n_step_return']:
+            print(f"args.train_freq = {args.train_freq}", file=fp)
+            if ADV_STYLE[args.adv_style] == ADV_STYLE['n_step_return']:
                 print("ADVANTAGE_STYLE = N_step return", file=fp)
-            elif adv_style == ADV_STYLE['gae']:
+            elif ADV_STYLE[args.adv_style] == ADV_STYLE['gae']:
                 print(f"ADVANTAGE_STYLE = GAE", file=fp)
 
            
@@ -263,72 +237,28 @@ def main(is_train, network_arch, adv_style):
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
 
     #### Create a Master Actor-Critic Agent
-    Before_Train_Model = ACNet(name=MODEL_NAME, model_dir=MODEL_DIR, 
+    Before_Train_Model = ACNet(name=args.model_name, model_dir=args.model_dir, 
                        fc_hid_layers=FC_HID_LAYERS, 
                        input_dims=INPUT_DIMS, 
                        actor_dims=ACTOR_OUTPUT_DIMS,
-                       net_arch=network_arch)
+                       net_arch=NET_ARCH[args.net_arch])
     
     #### Load the trained network params
     if IS_CONTINUE_TRAINING:
         Before_Train_Model.load_params()
         print("CONTINUE TRAINING FROM PREVIOUS CHECKPOINT")
-        print(f"Model directory: = {MODEL_DIR}")
-        print(f"Model name: {MODEL_NAME}")
+        print(f"Model directory: = {args.model_dir}")
+        print(f"Model name: {args.model_name}")
     else:
-        if is_train == OPERATION_MODE["train_mode"]:
+        if OPERATION_MODE[args.mode] == OPERATION_MODE["train_mode"]:
             print("TRAINING THE NEURAL NETWORK FROM SCRATCH!")
     
         
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
     #### Training & Testing datasets
-    sfc_spec_file = 'sfc_file.sfc'
-    
-    # {'net_topo' : "ibm_200000_slots_1_con.net",
-    #                  'traffic' : "reordered_traffic_200000_slots_1_con.tra"},
-    train_dataset_list = [
-                    {'net_topo' : "ibm_200000_slots_1_con.net",
-                     'traffic' : "reordered_traffic_200000_slots_1_con.tra"},
-                    \
-                    {'net_topo' : "ibm_200000_slots_1_con_2021-September-21__16-06-04.net",
-                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-September-21__16-06-04.tra"},
-                    \
-                    {'net_topo': "ibm_200000_slots_1_con_2021-September-21__16-06-36.net",
-                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-September-21__16-06-36.tra"},
-                    \
-                    {'net_topo' : "ibm_200000_slots_1_con_2021-September-21__16-06-10.net",
-                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-September-21__16-06-10.tra"},
-                    \
-                    {'net_topo' : "ibm_200000_slots_1_con_2021-September-21__16-08-42.net",
-                     'traffic': "reordered_traffic_200000_slots_1_con_2021-September-21__16-08-42.tra"},
-                    \
-                    {'net_topo' : "ibm_200000_slots_1_con_2021-September-21__16-09-30.net",
-                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-September-21__16-09-30.tra"},
-                     \
-                    {'net_topo' : "ibm_200000_slots_1_con_2021-November-06__00-24-34.net",
-                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-24-34.tra"},
-                     \
-                    {'net_topo' : "ibm_200000_slots_1_con_2021-November-06__00-24-55.net",
-                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-24-55.tra"},
-                     \
-                    {'net_topo' : "ibm_200000_slots_1_con_2021-November-06__00-25-28.net",
-                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-25-28.tra"},
-                     \
-                    {'net_topo' : "ibm_200000_slots_1_con_2021-November-06__00-25-55.net",
-                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-25-55.tra"},
-                     \
-                    {'net_topo' : "ibm_200000_slots_1_con_2021-November-06__00-27-07.net",
-                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-27-07.tra"},
-                     \
-                     {'net_topo' : "ibm_200000_slots_1_con_2021-November-06__00-27-36.net",
-                     'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-27-36.tra"}
-                    ]
-    
-    # test_dataset_list = [{"net_topo": "ibm_15000_slots_1_con.net",
-    #                        "traffic": "reordered_traffic_15000_slots_1_con.tra"}]
-    test_dataset_list = [{"net_topo": "ibm_100000_slots_1_con.net",
-                           "traffic": "reordered_traffic_100000_slots_1_con.tra"}]
-
+    sfc_spec_file = get_sfc_spec_file()
+    train_dataset_list = get_train_datasets()
+    test_dataset_list = get_test_datasets(args.test_size)
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
 
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
@@ -338,9 +268,9 @@ def main(is_train, network_arch, adv_style):
     all_req_lists = []
     all_n_reqs = []
     #### TODO: implement it in parallel in the future
-    if is_train == OPERATION_MODE["train_mode"]:
-        for idx in range(N_WORKERS):
-            req_json_file = os.path.join(DATA_FOLDER, train_dataset_list[idx]['traffic'])
+    if OPERATION_MODE[args.mode] == OPERATION_MODE["train_mode"]:
+        for idx in range(args.n_workers):
+            req_json_file = os.path.join(args.data_folder, train_dataset_list[idx]['traffic'])
             n_req, req_list = retrieve_sfc_req_from_json(req_json_file)
             print(f"Dataset {idx+1} is ")
             print(f"{train_dataset_list[idx]['net_topo']}")
@@ -349,8 +279,8 @@ def main(is_train, network_arch, adv_style):
             all_n_reqs.append(n_req)
             all_req_lists.append(req_list)
     else:
-        for idx in range(N_WORKERS):
-            req_json_file = os.path.join(DATA_FOLDER, test_dataset_list[idx]['traffic'])
+        for idx in range(args.n_workers):
+            req_json_file = os.path.join(args.data_folder, test_dataset_list[idx]['traffic'])
             n_req, req_list = retrieve_sfc_req_from_json(req_json_file)
             print(f"Dataset {idx+1} is ")
             print(f"{test_dataset_list[idx]['net_topo']}")
@@ -361,104 +291,35 @@ def main(is_train, network_arch, adv_style):
 
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
     #### Training & Testing params
-    max_epochs = min([N_EPOCHS,] * N_WORKERS, all_n_reqs)
+    max_epochs = min([N_EPOCHS,] * args.n_workers, all_n_reqs)
     print(f"max_epochs = {max_epochs}")
-
-    train_params = {'epochs': max_epochs,
-                    'n_workers': N_WORKERS,
-                    'sfc_spec': sfc_spec_file,
-                    'datasets': train_dataset_list,
-                    'data_folder': DATA_FOLDER,
-                    'model_dir': MODEL_DIR,
-                    'train_dir': TRAIN_DIR,
-                    'test_dir': TEST_DIR,
-                    'train_freq': TRAIN_FREQ,
-                    'adv_style': adv_style,
-                    'hidden_layers': FC_HID_LAYERS,
-                    'input_dims': INPUT_DIMS,
-                    'actor_dims': ACTOR_OUTPUT_DIMS,
-                    'learning_rate': LEARNING_RATE,
-                    'gamma': GAMMA,
-                    'tau': TAU,
-                    'critic_factor': CRITIC_FACTOR,
-                    'actor_factor': ACTOR_FACTOR,
-                    'entropy_factor': ENTROPY_FACTOR,
-                    'entropy_decay_val': ENTROPY_DECAY_VAL,
-                    'entropy_decay_freq': ENTROPY_DECAY_FREQ,
-                    'entropy_min': ENTROPY_MIN,
-                    'betas': BETAS,
-                    'big_rwd': BIG_RWD,
-                    'N_steps': N_STEPS,
-                    'max_moves': MAX_MOVE,
-                    'resource_scaler': RESOURCE_SCALER,
-                    'is_binary_state': IS_BINARY_STATE,
-                    'state_noise_scale': STATE_NOISE_SCALE,
-                    'opt_lr': RMS_LR,
-                    'opt_epsilon': RMS_EPSILON,
-                    'opt_weight_decay': RMS_WEIGHT_DECAY,
-                    'opt_alpha': RMS_ALPHA,
-                    'opt_momentum': RMS_MOMENTUM,
-                    'opt_centered': RMS_CENTERED
-                    }
+    train_params, test_params = \
+        get_train_test_params(max_epochs, sfc_spec_file, 
+        train_dataset_list, TRAIN_DIR,
+        test_dataset_list, TEST_DIR,
+        FC_HID_LAYERS, INPUT_DIMS, ACTOR_OUTPUT_DIMS, 
+        args)
     
-    test_params = {'epochs': min([N_EPOCHS,]*N_WORKERS, all_n_reqs),
-                    'n_workers': N_WORKERS,
-                    'sfc_spec': sfc_spec_file,
-                    'datasets': test_dataset_list,
-                    'data_folder': DATA_FOLDER,
-                    'model_dir': MODEL_DIR,
-                    'train_dir': TRAIN_DIR,
-                    'test_dir': TEST_DIR,
-                    'train_freq': TRAIN_FREQ,
-                    'adv_style': adv_style,
-                    'hidden_layers': FC_HID_LAYERS,
-                    'input_dims': INPUT_DIMS,
-                    'actor_dims': ACTOR_OUTPUT_DIMS,
-                    'learning_rate': LEARNING_RATE,
-                    'gamma': GAMMA,
-                    'tau': TAU,
-                    'critic_factor': CRITIC_FACTOR,
-                    'actor_factor': ACTOR_FACTOR,
-                    'entropy_factor': ENTROPY_FACTOR,
-                    'entropy_factor': ENTROPY_FACTOR,
-                    'entropy_decay_val': ENTROPY_DECAY_VAL,
-                    'entropy_decay_freq': ENTROPY_DECAY_FREQ,
-                    'entropy_min': ENTROPY_MIN,
-                    'betas': BETAS,
-                    'big_rwd': BIG_RWD,
-                    'N_steps': N_STEPS,
-                    'max_moves': MAX_MOVE,
-                    'resource_scaler': RESOURCE_SCALER,
-                    'is_binary_state': IS_BINARY_STATE,
-                    'state_noise_scale': STATE_NOISE_SCALE,
-                    'opt_lr': RMS_LR,
-                    'opt_epsilon': RMS_EPSILON,
-                    'opt_weight_decay': RMS_WEIGHT_DECAY,
-                    'opt_alpha': RMS_ALPHA,
-                    'opt_momentum': RMS_MOMENTUM,
-                    'opt_centered': RMS_CENTERED
-                    }        
-
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
     ''' A3C_Worker's task '''
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
     ''' Original Global_Model '''
-    Global_Model = ACNet(name=MODEL_NAME, model_dir=MODEL_DIR, 
+    Global_Model = ACNet(name=args.model_name, model_dir=args.model_dir, 
                        fc_hid_layers=FC_HID_LAYERS, 
                        input_dims=INPUT_DIMS, 
                        actor_dims=ACTOR_OUTPUT_DIMS,
-                       net_arch=network_arch)
+                       net_arch=NET_ARCH[args.net_arch])
 
     Global_Model.load_state_dict(Before_Train_Model.state_dict())
 
     #### Training mode
-    if is_train == OPERATION_MODE["train_mode"]:
+    if OPERATION_MODE[args.mode] == OPERATION_MODE["train_mode"]:
         print("Training the A3C RL-agent")
         # the model's parameters are globally shared among processes
         Global_Model.share_memory()
-        global_optimizer = SharedRMSProp(Global_Model.parameters(), lr=RMS_LR,
-                                        eps=RMS_EPSILON, weight_decay=RMS_WEIGHT_DECAY,
-                                        alpha=RMS_ALPHA, momentum=RMS_MOMENTUM, centered=RMS_CENTERED)
+        global_optimizer = SharedRMSProp(Global_Model.parameters(), lr=args.opt_lr,
+                                        eps=args.opt_epsilon, weight_decay=args.opt_weight_decay,
+                                        alpha=args.opt_alpha, momentum=args.opt_momentum, centered=args.opt_centered)
         # global_optimizer = SharedAdam(Global_Model.parameters(), lr=train_params['learning_rate'])
         processes = []
         g_counter = mp.Value('i', 0) # global counter shared among processes
@@ -474,7 +335,7 @@ def main(is_train, network_arch, adv_style):
                                    params=train_params,
                                    traffic_file=all_req_lists[idx], 
                                    counter=g_counter,
-                                   net_arch=network_arch,
+                                   net_arch=NET_ARCH[args.net_arch],
                                    is_train=True)
             all_a3c_workers.append(a3c_worker)
 
@@ -508,10 +369,9 @@ def main(is_train, network_arch, adv_style):
         Global_Model.save_params()
         # Copy trained network model to the train_directory
         abs_path = os.getcwd()
-        full_path = os.path.join(abs_path, MODEL_DIR)
-        src_file = os.path.join(full_path, MODEL_NAME + '.pt')
+        full_path = os.path.join(abs_path, args.model_dir)
+        src_file = os.path.join(full_path, args.model_name + '.pt')
         shutil.copy2(src_file, TRAIN_DIR)
-
 
         #### Plotting results #######################################################################
         print("Plotting some results")
@@ -526,44 +386,46 @@ def main(is_train, network_arch, adv_style):
         ''' Plot Episode Rewards'''
         # Read reward_log file data
         reward_log_data = read_reward_data(reward_logs)
-        # Plot episode rewards
-        plt.figure(figsize=(10,7.5))
-        plt.grid()
-        plt.title("Reward over training epochs")
-        plt.xlabel("Epochs",fontsize=22)
-        plt.ylabel("Reward",fontsize=22)
-        mov_avg_reward = mov_window_avg(reward_log_data.mean(axis=0), window_size=1000)
-        plt.plot(mov_avg_reward, color='b')
-        fig_name = "Avg_Train_Reward_" + now.strftime("%Y-%B-%d__%H-%M")
-        fig_name = os.path.join(train_params['train_dir'], fig_name)
-        plt.savefig(fig_name)
+        plot_episode_rwd(reward_log_data, now, train_params)
+        # # Plot episode rewards
+        # plt.figure(figsize=(10,7.5))
+        # plt.grid()
+        # plt.title("Reward over training epochs")
+        # plt.xlabel("Epochs",fontsize=22)
+        # plt.ylabel("Reward",fontsize=22)
+        # mov_avg_reward = mov_window_avg(reward_log_data.mean(axis=0), window_size=1000)
+        # plt.plot(mov_avg_reward, color='b')
+        # fig_name = "Avg_Train_Reward_" + now.strftime("%Y-%B-%d__%H-%M")
+        # fig_name = os.path.join(train_params['train_dir'], fig_name)
+        # plt.savefig(fig_name)
 
         ''' Plot loss values'''
         # Read loss_log file data
         loss_log_data = read_loss_data(loss_logs)
-        # Plot loss values over training steps
-        plt.figure(figsize=(10,7.5))
-        plt.grid()
-        plt.title("Loss over training epochs")
-        plt.xlabel("Epochs",fontsize=22)
-        plt.ylabel("Loss",fontsize=22)
-        mov_avg_loss = mov_window_avg(loss_log_data.mean(axis=0), window_size=1000)
-        plt.plot(mov_avg_loss, color='tab:orange')
-        plt.plot(loss_log_data.mean(axis=1), color='b')
-        fig_name = "Avg_Train_Loss_" + now.strftime("%Y-%B-%d__%H-%M")
-        fig_name = os.path.join(train_params['train_dir'], fig_name)
-        plt.savefig(fig_name)
+        plot_loss_val(loss_log_data, now, train_params)
+        # # Plot loss values over training steps
+        # plt.figure(figsize=(10,7.5))
+        # plt.grid()
+        # plt.title("Loss over training epochs")
+        # plt.xlabel("Epochs",fontsize=22)
+        # plt.ylabel("Loss",fontsize=22)
+        # mov_avg_loss = mov_window_avg(loss_log_data.mean(axis=0), window_size=1000)
+        # plt.plot(mov_avg_loss, color='tab:orange')
+        # plt.plot(loss_log_data.mean(axis=1), color='b')
+        # fig_name = "Avg_Train_Loss_" + now.strftime("%Y-%B-%d__%H-%M")
+        # fig_name = os.path.join(train_params['train_dir'], fig_name)
+        # plt.savefig(fig_name)
 
         #############################################################################################
 
     #### Testing mode
     else:
         print("Testing the trained A2C RL-agent")
-        Global_Model = ACNet(name=MODEL_NAME, model_dir=MODEL_DIR, 
+        Global_Model = ACNet(name=args.model_name, model_dir=args.model_dir, 
                        fc_hid_layers=FC_HID_LAYERS, 
                        input_dims=INPUT_DIMS, 
                        actor_dims=ACTOR_OUTPUT_DIMS,
-                       net_arch=network_arch)
+                       net_arch=NET_ARCH[args.net_arch])
         Global_Model.load_params()
         Global_Model.share_memory()
         global_optimizer = SharedRMSProp(Global_Model.parameters(), lr=train_params['learning_rate'])
@@ -575,7 +437,7 @@ def main(is_train, network_arch, adv_style):
                                 params=test_params,
                                 traffic_file=all_req_lists[idx], 
                                 counter=g_counter,
-                                net_arch=network_arch,
+                                net_arch=NET_ARCH[args.net_arch],
                                 is_train=False)
         a3c_worker.start()
         a3c_worker.join()
@@ -588,42 +450,43 @@ def main(is_train, network_arch, adv_style):
     ''' Plot accum_n_accepted_req over epochs'''
     # Read accept_ratio.log files
     ar_logs = []
-    for w in range(N_WORKERS):
-        if is_train == OPERATION_MODE["train_mode"]:
-            fp = os.path.join(train_params['train_dir'], 'W_' + str(w) + "_accept_ratio.log")
+    for w in range(args.n_workers):
+        if OPERATION_MODE[args.mode] == OPERATION_MODE["train_mode"]:
+            fp = os.path.join(train_params['train_dir'], "W_" + str(w) + "_accept_ratio.log")
         else:
-            fp = os.path.join(train_params['test_dir'], 'W_' + str(w) + "_test_accept_ratio.log")
+            fp = os.path.join(train_params['test_dir'], "W_" + str(w) + "_test_accept_ratio.log")
         ar_logs.append(fp)
     ar_log_datas = read_accept_ratio_data(ar_logs)
-    # Accumulate n_accepted requests
-    accum_accept_reqs = []
-    for f in ar_log_datas:
-        accum_count = 0
-        counts = np.zeros(len(f))
-        for i in range(len(f)):
-            counts[i] = accum_count = f[i] + accum_count
-        accum_accept_reqs.append(counts)
-    legs = ['W_' + str(i) for i in range(N_WORKERS)]
-    colors = ['r', 'g', 'b', 'c', 'm', 'y', 'k', 'orange', 'fuchsia', 'teal', 'lime', 'pink']
-    plt.figure(figsize=(10,7.5))
-    plt.grid()
-    plt.title("Accumulated accepted request over epochs")
-    plt.xlabel("Epochs",fontsize=22)
-    plt.ylabel("Num. of requests",fontsize=22)
-    [plt.plot(accum_accept_reqs[i], color=colors[i]) for i in range(N_WORKERS)]
-    plt.legend(legs)
-    if is_train == OPERATION_MODE["train_mode"]:
-        fig_name = os.path.join(train_params['train_dir'], 
-                                "Train_Accum_Accept_Reqs_" + now.strftime("%Y-%B-%d__%H-%M"))   
-    else:
-        fig_name = os.path.join(train_params['test_dir'], 
-                                "Test_Accum_Accept_Reqs_" + now.strftime("%Y-%B-%d__%H-%M"))
-    plt.savefig(fig_name)
+
+    accum_accept_reqs = plot_accum_accept_req(ar_log_datas, args.mode, train_params, now)
+    # # Accumulate n_accepted requests
+    # accum_accept_reqs = []
+    # for f in ar_log_datas:
+    #     accum_count = 0
+    #     counts = np.zeros(len(f))
+    #     for i in range(len(f)):
+    #         counts[i] = accum_count = f[i] + accum_count
+    #     accum_accept_reqs.append(counts)
+    
+    # legs = ['W_' + str(i) for i in range(args.n_workers)]
+    # colors = ['r', 'g', 'b', 'c', 'm', 'y', 'k', 'orange', 'fuchsia', 'teal', 'lime', 'pink']
+    # plt.figure(figsize=(10,7.5))
+    # plt.grid()
+    # plt.title("Accumulated accepted request over epochs")
+    # plt.xlabel("Epochs",fontsize=22)
+    # plt.ylabel("Num. of requests",fontsize=22)
+    # [plt.plot(accum_accept_reqs[i], color=colors[i]) for i in range(args.n_workers)]
+    # plt.legend(legs)
+    # if OPERATION_MODE[args.mode] == OPERATION_MODE["train_mode"]:
+    #     fig_name = os.path.join(train_params['train_dir'], 
+    #                             "Train_Accum_Accept_Reqs_" + now.strftime("%Y-%B-%d__%H-%M"))   
+    # else:
+    #     fig_name = os.path.join(train_params['test_dir'], 
+    #                             "Test_Accum_Accept_Reqs_" + now.strftime("%Y-%B-%d__%H-%M"))
+    # plt.savefig(fig_name)
 
     # Print the avg acceptance ratio 
-    print(f"Average request acceptance ratio of {N_WORKERS} workers = {np.mean(ar_log_datas)*100}%")
-
-    ''' Check Global_Model vs. Before_Train_Model'''
+    print(f"Average request acceptance ratio of {args.n_workers} workers = {np.mean(ar_log_datas)*100}%")
     print("Return the Before_Train and After_Train models")
     return Before_Train_Model, Global_Model
 #############################################################################################
@@ -650,7 +513,7 @@ def diff_weights(model1, model2):
 def calc_model_diff(before_model, after_model, net_arch):
     NET_ARCH = {'shared_net': 1, 'shared_net_w_RNN':2, 'separated_net':3}
     diff, before_weights, after_weights = diff_weights(before_model, after_model)
-    if net_arch == NET_ARCH['shared_net']:
+    if NET_ARCH[net_arch] == NET_ARCH['shared_net']:
         diff1 = np.sum(np.sqrt(diff['fc1.weight']**2)) + np.sum(np.sqrt(diff['fc1.bias']**2))
         diff2 = np.sum(np.sqrt(diff['fc2.weight']**2)) + np.sum(np.sqrt(diff['fc2.bias']**2))
         diff3 = np.sum(np.sqrt(diff['fc3.weight']**2)) + np.sum(np.sqrt(diff['fc3.bias']**2))
@@ -662,11 +525,11 @@ def calc_model_diff(before_model, after_model, net_arch):
         print(f"diff fc3 = {diff3}")
         print(f"diff actor_lin1 = {diff_actor_lin}")
         print(f"diff critic_lin1 = {diff_critic_lin}")
-    elif net_arch == NET_ARCH['shared_net_w_RNN']:
+    elif NET_ARCH[net_arch] == NET_ARCH['shared_net_w_RNN']:
         # TODO: implement diff
         pass
 
-    elif net_arch == NET_ARCH['separated_net']:
+    elif NET_ARCH[net_arch] == NET_ARCH['separated_net']:
         # Actor
         a_diff1 = np.sum(np.sqrt(diff['actor_fc1.weight']**2)) + np.sum(np.sqrt(diff['actor_fc1.bias']**2))
         a_diff2 = np.sum(np.sqrt(diff['actor_fc2.weight']**2)) + np.sum(np.sqrt(diff['actor_fc2.bias']**2))
@@ -680,15 +543,60 @@ def calc_model_diff(before_model, after_model, net_arch):
 
 #### Run the script
 if __name__ == "__main__":
+    #### Parsing arguments
+    parser = argparse.ArgumentParser(description="A3C-based SFC Embedding and Routing")
+
+    parser.add_argument("mode", type=str, help="Support options: train_mode, test_mode")
+    parser.add_argument("--net_arch", default="shared_net", type=str, 
+                        help="Neural network architecture. Support options: shared_net, shared_net_w_RNN, separated_net")
+    parser.add_argument("--epochs", default=200_000, type=int, help="Number of episodes/epochs")
+    parser.add_argument("--n_workers", default=12, type=int, help="Number of parallel workers. Support upto 12")
+    parser.add_argument("--sfc_spec", default="sfc_file.sfc", help="SFC specification file")
+    parser.add_argument("--data_folder", default="SOF_Data_Sets-v09\complete_data_sets", type=str, help="Dataset directory")
+    parser.add_argument("--model_dir", default="A3C_SFCE_models", type=str, help="Directory storing the model")
+    parser.add_argument("--model_name", default="AC_Agent", type=str, help="Name of the model")
+    parser.add_argument("--train_freq", default=5, type=int, help="Num of episode per training")
+    parser.add_argument("--adv_style", default="n_step_return", type=str, 
+                        help="Method for calculating advantage. Support options: n_step_return, gae")
+    parser.add_argument("--lr", default=1e-3, type=float, help="Learning rate")
+    parser.add_argument("--gamma", default=0.88, type=float, help="Discount factor")
+    parser.add_argument("--tau", default=1, type=float, help="GAE factor")
+    parser.add_argument("--critic_factor", default=1, type=float, help="Weight associated to the Critic head")
+    parser.add_argument("--actor_factor", default=0.25, type=float, help="Weight associated to the Actor head")
+    parser.add_argument("--entropy_factor", default=0.1, type=float, help="Initial weight associated with the entropy term")
+    parser.add_argument("--entropy_decay_val", default=0.01, type=float, help="Entropy decay value")
+    parser.add_argument("--entropy_decay_freq", default=12_000, type=int, help="Entropy decay frequency")
+    parser.add_argument("--entropy_min", default=0.01, type=float, help="Min value of the entropy factor")
+    parser.add_argument("--betas", default=[1.0, 25, 15, 0.0], type=list, help="List of beta weights in the reward function")
+    parser.add_argument("--big_rwd", default=3.0, type=float, help="Big reward value in the reward function")
+    parser.add_argument("--n_steps", default=15, type=int, help="N-step values")
+    parser.add_argument("--max_moves", default=25, type=int, help="Maximum number of steps per episode")
+    parser.add_argument("--rsc_scaler", default=1, type=float, help="Resource scaler value in [0, 1]")
+    parser.add_argument("--is_binary_state", default=True, type=bool, help="Using binary state or fractional state render")
+    parser.add_argument("--state_noise_scale", default=100, type=float, help="Scale of the noise added to the state")
+    parser.add_argument("--opt_lr", default=5e-4, type=float, help="Optimizer's learning rate")
+    parser.add_argument("--opt_epsilon", default=1e-5, type=float, help="Optimizer's epsilon value")
+    parser.add_argument("--opt_weight_decay", default=0, type=float, help="Optimizer's weight decay value")
+    parser.add_argument("--opt_alpha", default=0.99, type=float, help="Optimizer's alpha value")
+    parser.add_argument("--opt_momentum", default=0.2, type=float, help="Optimizer's momentum value")
+    parser.add_argument("--opt_centered", default=False, type=bool, help="Whether using centered or not for the optimzer")
+    parser.add_argument("--test_size", default="15k", type=str, 
+                        help="Choose 15k-dataset or 100k-dataset for testing. Support options: 15k, 100k")
+
+    args = parser.parse_args()
+    if args.n_workers <= 0: 
+        raise ValueError("A positive value is required.")
+    if args.n_workers > 12: 
+        raise ValueError("Support upto 12 workers.")
+    
+    if args.mode == "test_mode":
+        args.n_workers = 1
+        input("Test mode supports only 1 worker! Press Enter to continue testing the model...")
+        
     OPERATION_MODE = {'train_mode': 1, 'test_mode': 0}
     NET_ARCH = {'shared_net': 1, 'shared_net_w_RNN':2, 'separated_net':3}
     ADV_STYLE = {'n_step_return': 1, 'gae': 2}# n-step return or GAE
-    
-    # Train/Test Settings
-    network_arch = NET_ARCH['shared_net']
-    operating_mode = OPERATION_MODE['test_mode']
-    adv_style = ADV_STYLE['n_step_return']
 
-    Before_Model, After_Model = main(operating_mode, network_arch, adv_style)
-    calc_model_diff(Before_Model, After_Model, network_arch)
+    Before_Model, After_Model = main(args)
+    calc_model_diff(Before_Model, After_Model, args.net_arch)
 
