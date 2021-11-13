@@ -179,10 +179,10 @@ def main(args):
         else:
             print(f"testing directory: {TEST_DIR} \n", file=fp)
         
-        print(f"args.is_binary_state = {args.is_binary_state}", file=fp)
-        print(f"IS_NEIGHBOR_MASK = {IS_NEIGHBOR_MASK}", file=fp)
-        print(f"IS_CONTINUE_TRAINING = {IS_CONTINUE_TRAINING}", file=fp)
-        print(f'args.state_noise_scale = {args.state_noise_scale}', file=fp)
+        print(f"is_binary_state = {args.is_binary_state}", file=fp)
+        print(f"is_neighbor_mask = {IS_NEIGHBOR_MASK}", file=fp)
+        print(f"is_continue_training = {IS_CONTINUE_TRAINING}", file=fp)
+        print(f'state_noise_scale = {args.state_noise_scale}', file=fp)
         
         print("NEURAL NETWORK SETTINGS", file=fp)
         print(f"INPUT_DIMS = {INPUT_DIMS}", file=fp)
@@ -200,15 +200,15 @@ def main(args):
         # print(f"FC_HID_LAYERS  = {FC_HID_LAYERS}", file=fp)
         
         print("\nLearning parameters", file=fp)
-        print(f"args.gamma = {args.gamma}", file=fp)
-        print(f"args.tau = {args.tau}", file=fp)
-        print(f"args.lr = {args.lr}", file=fp)
-        print(f"args.critic_factor = {args.critic_factor}", file=fp)
-        print(f"args.actor_factor = {args.actor_factor}", file=fp)
-        print(f"args.entropy_factor = {args.entropy_factor}", file=fp)
-        print(f"args.entropy_decay_val = {args.entropy_decay_val}", file=fp)
-        print(f"args.entropy_decay_freq = {args.entropy_decay_freq}", file=fp)
-        print(f"args.entropy_min = {args.entropy_min}", file=fp)
+        print(f"gamma = {args.gamma}", file=fp)
+        print(f"tau = {args.tau}", file=fp)
+        print(f"lr = {args.lr}", file=fp)
+        print(f"critic_factor = {args.critic_factor}", file=fp)
+        print(f"actor_factor = {args.actor_factor}", file=fp)
+        print(f"entropy_factor = {args.entropy_factor}", file=fp)
+        print(f"entropy_decay_val = {args.entropy_decay_val}", file=fp)
+        print(f"entropy_decay_freq = {args.entropy_decay_freq}", file=fp)
+        print(f"entropy_min = {args.entropy_min}", file=fp)
 
         print("\nOptimizer parameters", file=fp)
         print(f"Opt_Learning_Rate = {args.opt_lr}", file=fp)
@@ -219,18 +219,18 @@ def main(args):
         print(f"Opt_Centered = {args.opt_centered}", file=fp)
         
         print("\nCost factors betas", file=fp)
-        print(f"args.betas = {args.betas}", file=fp)
+        print(f"betas = {args.betas}", file=fp)
         print(f"Big_Reward = {args.big_rwd}", file=fp)
 
         if OPERATION_MODE["train_mode"]:
             print("\nTraining parameters", file=fp)
-            print(f"args.n_workers = {args.n_workers}", file=fp)
-            print(f"N_EPOCHS = {N_EPOCHS}", file=fp)
-            print(f"args.train_freq = {args.train_freq}", file=fp)
+            print(f"n_workers = {args.n_workers}", file=fp)
+            print(f"n_epochs = {N_EPOCHS}", file=fp)
+            print(f"train_freq = {args.train_freq}", file=fp)
             if ADV_STYLE[args.adv_style] == ADV_STYLE['n_step_return']:
-                print("ADVANTAGE_STYLE = N_step return", file=fp)
+                print("advantage calc method = N_step return", file=fp)
             elif ADV_STYLE[args.adv_style] == ADV_STYLE['gae']:
-                print(f"ADVANTAGE_STYLE = GAE", file=fp)
+                print(f"advantage calc method = GAE", file=fp)
 
            
     print("Export system parameter setting into text files ... DONE!")
@@ -567,7 +567,7 @@ if __name__ == "__main__":
     parser.add_argument("--entropy_decay_val", default=0.01, type=float, help="Entropy decay value")
     parser.add_argument("--entropy_decay_freq", default=12_000, type=int, help="Entropy decay frequency")
     parser.add_argument("--entropy_min", default=0.01, type=float, help="Min value of the entropy factor")
-    parser.add_argument("--betas", default=[1.0, 25, 15, 0.0], type=list, help="List of beta weights in the reward function")
+    parser.add_argument("--betas", default=[1.0, 25, 15, 0.0], nargs='+', type=float, help="List of beta weights in the reward function")
     parser.add_argument("--big_rwd", default=3.0, type=float, help="Big reward value in the reward function")
     parser.add_argument("--n_steps", default=15, type=int, help="N-step values")
     parser.add_argument("--max_moves", default=25, type=int, help="Maximum number of steps per episode")
