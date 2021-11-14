@@ -387,35 +387,12 @@ def main(args):
         # Read reward_log file data
         reward_log_data = read_reward_data(reward_logs)
         plot_episode_rwd(reward_log_data, now, train_params)
-        # # Plot episode rewards
-        # plt.figure(figsize=(10,7.5))
-        # plt.grid()
-        # plt.title("Reward over training epochs")
-        # plt.xlabel("Epochs",fontsize=22)
-        # plt.ylabel("Reward",fontsize=22)
-        # mov_avg_reward = mov_window_avg(reward_log_data.mean(axis=0), window_size=1000)
-        # plt.plot(mov_avg_reward, color='b')
-        # fig_name = "Avg_Train_Reward_" + now.strftime("%Y-%B-%d__%H-%M")
-        # fig_name = os.path.join(train_params['train_dir'], fig_name)
-        # plt.savefig(fig_name)
 
         ''' Plot loss values'''
         # Read loss_log file data
         loss_log_data = read_loss_data(loss_logs)
         plot_loss_val(loss_log_data, now, train_params)
-        # # Plot loss values over training steps
-        # plt.figure(figsize=(10,7.5))
-        # plt.grid()
-        # plt.title("Loss over training epochs")
-        # plt.xlabel("Epochs",fontsize=22)
-        # plt.ylabel("Loss",fontsize=22)
-        # mov_avg_loss = mov_window_avg(loss_log_data.mean(axis=0), window_size=1000)
-        # plt.plot(mov_avg_loss, color='tab:orange')
-        # plt.plot(loss_log_data.mean(axis=1), color='b')
-        # fig_name = "Avg_Train_Loss_" + now.strftime("%Y-%B-%d__%H-%M")
-        # fig_name = os.path.join(train_params['train_dir'], fig_name)
-        # plt.savefig(fig_name)
-
+        
         #############################################################################################
 
     #### Testing mode
@@ -442,10 +419,9 @@ def main(args):
         a3c_worker.start()
         a3c_worker.join()
         a3c_worker.terminate()
-
+        
+        ''' Plot system throughput over epochs'''
         #### TODO: Plot system throughput
-
-    #############################################################################################
 
     ''' Plot accum_n_accepted_req over epochs'''
     # Read accept_ratio.log files
@@ -459,34 +435,11 @@ def main(args):
     ar_log_datas = read_accept_ratio_data(ar_logs)
 
     accum_accept_reqs = plot_accum_accept_req(ar_log_datas, args.mode, train_params, now)
-    # # Accumulate n_accepted requests
-    # accum_accept_reqs = []
-    # for f in ar_log_datas:
-    #     accum_count = 0
-    #     counts = np.zeros(len(f))
-    #     for i in range(len(f)):
-    #         counts[i] = accum_count = f[i] + accum_count
-    #     accum_accept_reqs.append(counts)
-    
-    # legs = ['W_' + str(i) for i in range(args.n_workers)]
-    # colors = ['r', 'g', 'b', 'c', 'm', 'y', 'k', 'orange', 'fuchsia', 'teal', 'lime', 'pink']
-    # plt.figure(figsize=(10,7.5))
-    # plt.grid()
-    # plt.title("Accumulated accepted request over epochs")
-    # plt.xlabel("Epochs",fontsize=22)
-    # plt.ylabel("Num. of requests",fontsize=22)
-    # [plt.plot(accum_accept_reqs[i], color=colors[i]) for i in range(args.n_workers)]
-    # plt.legend(legs)
-    # if OPERATION_MODE[args.mode] == OPERATION_MODE["train_mode"]:
-    #     fig_name = os.path.join(train_params['train_dir'], 
-    #                             "Train_Accum_Accept_Reqs_" + now.strftime("%Y-%B-%d__%H-%M"))   
-    # else:
-    #     fig_name = os.path.join(train_params['test_dir'], 
-    #                             "Test_Accum_Accept_Reqs_" + now.strftime("%Y-%B-%d__%H-%M"))
-    # plt.savefig(fig_name)
-
     # Print the avg acceptance ratio 
     print(f"Average request acceptance ratio of {args.n_workers} workers = {np.mean(ar_log_datas)*100}%")
+
+    #######################################################
+    
     print("Return the Before_Train and After_Train models")
     return Before_Train_Model, Global_Model
 #############################################################################################
