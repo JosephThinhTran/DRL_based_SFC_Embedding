@@ -32,49 +32,49 @@ import json
 import shutil
 import argparse
 from dataset_and_params import get_sfc_spec_file, get_train_datasets, get_test_datasets, get_train_test_params
-from plot_results import plot_episode_rwd, plot_loss_val, plot_accum_accept_req
+from plot_results import plot_episode_rwd, plot_loss_val, plot_accum_accept_req, plot_throughputs, plot_rsc_usages
 
 
-def read_reward_data(log_file):
-    '''Read data from multiple sub-files in log_file
-        Return a list where each sub-list contains data from each sub-file
-    '''
-    data = []
-    for f in log_file:
-        with open(f, 'r') as fp:
-            lines = fp.readlines()
-        vals = [float(l) for l in lines]
-        data.append(vals)
-    return np.array(data) 
+# def read_reward_data(log_file):
+#     '''Read data from multiple sub-files in log_file
+#         Return a list where each sub-list contains data from each sub-file
+#     '''
+#     data = []
+#     for f in log_file:
+#         with open(f, 'r') as fp:
+#             lines = fp.readlines()
+#         vals = [float(l) for l in lines]
+#         data.append(vals)
+#     return np.array(data) 
 
-def read_loss_data(log_files):
-    """
-    log_files: list 
-        A list of loss_log files
-        Each line of a loss_log file: actor_loss critic_loss sum_weighted_loss
+# def read_loss_data(log_files):
+#     """
+#     log_files: list 
+#         A list of loss_log files
+#         Each line of a loss_log file: actor_loss critic_loss sum_weighted_loss
     
-    Return:
-        A array where each row is the sum_weighted_loss items corresponding to each loss_log file
-    """
-    data = []
-    for f in log_files:
-        with open(f, 'r') as fp:
-            lines = fp.readlines()
-        vals = [float(l.split()[-1]) for l in lines]
-        data.append(vals)
-    return np.array(data) 
+#     Return:
+#         A array where each row is the sum_weighted_loss items corresponding to each loss_log file
+#     """
+#     data = []
+#     for f in log_files:
+#         with open(f, 'r') as fp:
+#             lines = fp.readlines()
+#         vals = [float(l.split()[-1]) for l in lines]
+#         data.append(vals)
+#     return np.array(data) 
 
-def read_accept_ratio_data(log_file):
-    '''Read data from multiple sub-files in log_file
-        Return a list where each sub-list contains data from each sub-file
-    '''
-    data = []
-    for f in log_file:
-        with open(f, 'r') as fp:
-            lines = fp.readlines()
-        vals = [float(l) for l in lines[:-1]] # do not read the last line
-        data.append(vals)
-    return np.array(data)
+# def read_accept_ratio_data(log_file):
+#     '''Read data from multiple sub-files in log_file
+#         Return a list where each sub-list contains data from each sub-file
+#     '''
+#     data = []
+#     for f in log_file:
+#         with open(f, 'r') as fp:
+#             lines = fp.readlines()
+#         vals = [float(l) for l in lines[:-1]] # do not read the last line
+#         data.append(vals)
+#     return np.array(data)
 
 
 def worker(a3c_worker, g_counter):
@@ -293,7 +293,7 @@ def main(args):
     #### Training & Testing params
     max_epochs = min([N_EPOCHS,] * args.n_workers, all_n_reqs)
     print(f"max_epochs = {max_epochs}")
-    train_params, test_params = \
+    input_params = \
         get_train_test_params(max_epochs, sfc_spec_file, 
         train_dataset_list, TRAIN_DIR,
         test_dataset_list, TEST_DIR,
@@ -320,19 +320,19 @@ def main(args):
         global_optimizer = SharedRMSProp(Global_Model.parameters(), lr=args.opt_lr,
                                         eps=args.opt_epsilon, weight_decay=args.opt_weight_decay,
                                         alpha=args.opt_alpha, momentum=args.opt_momentum, centered=args.opt_centered)
-        # global_optimizer = SharedAdam(Global_Model.parameters(), lr=train_params['learning_rate'])
+        # global_optimizer = SharedAdam(Global_Model.parameters(), lr=input_params['learning_rate'])
         processes = []
         g_counter = mp.Value('i', 0) # global counter shared among processes
         
         # create a3c_workers
         all_a3c_workers = []
-        for idx in range(train_params['n_workers']):
+        for idx in range(input_params['n_workers']):
             print(f'Start worker #{idx}')
             # Create an A3C worker instance
             a3c_worker = A3CWorker(worker_id=idx, 
                                    global_model=Global_Model,
                                    optimizer=global_optimizer,
-                                   params=train_params,
+                                   params=input_params,
                                    traffic_file=all_req_lists[idx], 
                                    counter=g_counter,
                                    net_arch=NET_ARCH[args.net_arch],
@@ -344,7 +344,7 @@ def main(args):
             worker.start()
             processes.append(worker)
             
-        # for idx in range(train_params['n_workers']):    
+        # for idx in range(input_params['n_workers']):    
         #     # instantiate a process invoking a worker who does the training
         #     p = mp.Process(target=all_a3c_workers[idx].run, args=(g_counter,))
         #     p.start()
@@ -358,7 +358,7 @@ def main(args):
         print(f"g_counter = {g_counter.value}")
         
         exit_codes = []
-        [exit_codes.append(processes[i].exitcode) for i in range(train_params["n_workers"])]
+        [exit_codes.append(processes[i].exitcode) for i in range(input_params["n_workers"])]
             
         # Save the model
         if 1 in exit_codes:
@@ -375,25 +375,25 @@ def main(args):
 
         #### Plotting results #######################################################################
         print("Plotting some results")
-        # Get the names of reward_log and loss_log files
-        reward_logs, loss_logs = [], []
-        for worker_id in range(train_params['n_workers']):
-            reward_log = os.path.join(train_params['train_dir'], "W_" + str(worker_id) + "_ep_reward.log")
-            reward_logs.append(reward_log)
-            loss_log = os.path.join(train_params['train_dir'], "W_" + str(worker_id) + "_losses.log")
-            loss_logs.append(loss_log)
+        # # Get the names of reward_log and loss_log files
+        # reward_logs, loss_logs = [], []
+        # for worker_id in range(input_params['n_workers']):
+        #     reward_log = os.path.join(input_params['train_dir'], "W_" + str(worker_id) + "_ep_reward.log")
+        #     reward_logs.append(reward_log)
+        #     loss_log = os.path.join(input_params['train_dir'], "W_" + str(worker_id) + "_losses.log")
+        #     loss_logs.append(loss_log)
         
         ''' Plot Episode Rewards'''
-        # Read reward_log file data
-        reward_log_data = read_reward_data(reward_logs)
-        plot_episode_rwd(reward_log_data, now, train_params)
+        # # Read reward_log file data
+        # reward_log_data = read_reward_data(reward_logs)
+        plot_episode_rwd(now, input_params)
 
         ''' Plot loss values'''
         # Read loss_log file data
-        loss_log_data = read_loss_data(loss_logs)
-        plot_loss_val(loss_log_data, now, train_params)
+        # loss_log_data = read_loss_data(loss_logs)
+        plot_loss_val(now, input_params)
         
-        #############################################################################################
+    #############################################################################################
 
     #### Testing mode
     else:
@@ -405,13 +405,13 @@ def main(args):
                        net_arch=NET_ARCH[args.net_arch])
         Global_Model.load_params()
         Global_Model.share_memory()
-        global_optimizer = SharedRMSProp(Global_Model.parameters(), lr=train_params['learning_rate'])
+        global_optimizer = SharedRMSProp(Global_Model.parameters(), lr=input_params['learning_rate'])
         processes = []
         g_counter = mp.Value('i', 0) # global counter shared among processes
         a3c_worker = A3CWorker(worker_id=idx, 
                                 global_model=Global_Model,
                                 optimizer=global_optimizer,
-                                params=test_params,
+                                params=input_params,
                                 traffic_file=all_req_lists[idx], 
                                 counter=g_counter,
                                 net_arch=NET_ARCH[args.net_arch],
@@ -419,24 +419,18 @@ def main(args):
         a3c_worker.start()
         a3c_worker.join()
         a3c_worker.terminate()
-        
-        ''' Plot system throughput over epochs'''
-        #### TODO: Plot system throughput
+    #############################################################################################
 
+    # Plot results
     ''' Plot accum_n_accepted_req over epochs'''
-    # Read accept_ratio.log files
-    ar_logs = []
-    for w in range(args.n_workers):
-        if OPERATION_MODE[args.mode] == OPERATION_MODE["train_mode"]:
-            fp = os.path.join(train_params['train_dir'], "W_" + str(w) + "_accept_ratio.log")
-        else:
-            fp = os.path.join(train_params['test_dir'], "W_" + str(w) + "_test_accept_ratio.log")
-        ar_logs.append(fp)
-    ar_log_datas = read_accept_ratio_data(ar_logs)
+    _, ar_ratio = plot_accum_accept_req(args.mode, input_params, now)
+    print(f"Average request acceptance ratio of {args.n_workers} workers = {ar_ratio}%")
 
-    accum_accept_reqs = plot_accum_accept_req(ar_log_datas, args.mode, train_params, now)
-    # Print the avg acceptance ratio 
-    print(f"Average request acceptance ratio of {args.n_workers} workers = {np.mean(ar_log_datas)*100}%")
+    ''' Plot system throughput over epochs'''
+    plot_throughputs(args.mode, input_params, now)
+
+    ''' Plot resource usages over epochs'''
+    plot_rsc_usages(args.mode, input_params, now)
 
     #######################################################
     
@@ -544,7 +538,7 @@ if __name__ == "__main__":
     
     if args.mode == "test_mode":
         args.n_workers = 1
-        input("Test mode supports only 1 worker! Press Enter to continue testing the model...")
+        print("Test mode supports only 1 worker!")
         
     OPERATION_MODE = {'train_mode': 1, 'test_mode': 0}
     NET_ARCH = {'shared_net': 1, 'shared_net_w_RNN':2, 'separated_net':3}

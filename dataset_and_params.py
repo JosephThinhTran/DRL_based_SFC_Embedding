@@ -47,7 +47,43 @@ def get_train_datasets():
             'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-27-07.tra"},
         \
         {'net_topo' : "ibm_200000_slots_1_con_2021-November-06__00-27-36.net",
-        'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-27-36.tra"}
+            'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-06__00-27-36.tra"},
+        \
+        {'net_topo' : "ibm_200000_slots_1_con_2021-November-16__22-35-32.net",
+            'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-16__22-35-32.tra"},
+        \
+        {'net_topo' : "ibm_200000_slots_1_con_2021-November-16__22-36-24.net",
+            'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-16__22-36-24.tra"},
+        \
+        {'net_topo' : "ibm_200000_slots_1_con_2021-November-16__22-37-00.net",
+            'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-16__22-37-00.tra"},
+        \
+        {'net_topo' : "ibm_200000_slots_1_con_2021-November-16__22-37-33.net",
+            'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-16__22-37-33.tra"},
+        \
+        {'net_topo' : "ibm_200000_slots_1_con_2021-November-16__22-38-11.net",
+            'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-16__22-38-11.tra"},
+        \
+        {'net_topo' : "ibm_200000_slots_1_con_2021-November-16__22-38-48.net",
+            'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-16__22-38-48.tra"},
+        \
+        {'net_topo' : "ibm_200000_slots_1_con_2021-November-17__11-22-26.net",
+            'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-17__11-22-26.tra"},
+        \
+        {'net_topo' : "ibm_200000_slots_1_con_2021-November-17__11-23-12.net",
+            'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-17__11-23-12.tra"},
+        \
+        {'net_topo' : "ibm_200000_slots_1_con_2021-November-17__11-23-23.net",
+            'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-17__11-23-23.tra"},
+        \
+        {'net_topo' : "ibm_200000_slots_1_con_2021-November-17__11-23-33.net",
+            'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-17__11-23-33.tra"},
+        \
+        {'net_topo' : "ibm_200000_slots_1_con_2021-November-17__11-23-47.net",
+            'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-17__11-23-47.tra"},
+        \
+        {'net_topo' : "ibm_200000_slots_1_con_2021-November-17__11-24-06.net",
+            'traffic' : "reordered_traffic_200000_slots_1_con_2021-November-17__11-24-06.tra"}
         ]
     return train_dataset_list
 
@@ -73,7 +109,7 @@ def get_train_test_params(max_epochs, sfc_spec_file,
     NET_ARCH = {'shared_net': 1, 'shared_net_w_RNN':2, 'separated_net':3}
     ADV_STYLE = {'n_step_return': 1, 'gae': 2}# n-step return or GAE
 
-    train_params = {'epochs': max_epochs,
+    params = {'epochs': max_epochs,
                     'n_workers': args.n_workers,
                     'sfc_spec': sfc_spec_file,
                     'datasets': train_dataset_list,
@@ -110,42 +146,4 @@ def get_train_test_params(max_epochs, sfc_spec_file,
                     'opt_centered': args.opt_centered
                     }
     
-    test_params = {'epochs': max_epochs,
-                    'n_workers': args.n_workers,
-                    'sfc_spec': sfc_spec_file,
-                    'datasets': test_dataset_list,
-                    'data_folder': args.data_folder,
-                    'model_dir': args.model_dir,
-                    'train_dir': train_dir,
-                    'test_dir': test_dir,
-                    'train_freq': args.train_freq,
-                    'adv_style': ADV_STYLE[args.adv_style],
-                    'hidden_layers': fc_hidden_layers,
-                    'input_dims': state_dim,
-                    'actor_dims': actor_ouput_dim,
-                    'learning_rate': args.lr,
-                    'gamma': args.gamma,
-                    'tau': args.tau,
-                    'critic_factor': args.critic_factor,
-                    'actor_factor': args.actor_factor,
-                    'entropy_factor': args.entropy_factor,
-                    'entropy_decay_val': args.entropy_decay_val,
-                    'entropy_decay_freq': args.entropy_decay_freq,
-                    'entropy_min': args.entropy_min,
-                    'betas': args.betas,
-                    'big_rwd': args.big_rwd,
-                    'N_steps': args.n_steps,
-                    'max_moves': args.max_moves,
-                    'resource_scaler': args.rsc_scaler,
-                    'is_binary_state': args.is_binary_state,
-                    'state_noise_scale': args.state_noise_scale,
-                    'opt_lr': args.opt_lr,
-                    'opt_epsilon': args.opt_epsilon,
-                    'opt_weight_decay': args.opt_weight_decay,
-                    'opt_alpha': args.opt_alpha,
-                    'opt_momentum': args.opt_momentum,
-                    'opt_centered': args.opt_centered
-                    }    
-    return train_params, test_params
-
-
+    return params

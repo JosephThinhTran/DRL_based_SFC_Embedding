@@ -12,6 +12,7 @@ Changes from v04
 """
 
 from networkx.algorithms.triads import is_triad
+from numpy.lib import real
 import torch
 from torch import nn
 from torch import optim
@@ -23,7 +24,7 @@ from matplotlib import pyplot as plt
 import os
 from collections import deque
 from edf_env_A3C_v2_02 import EdfEnv
-from data_utils_A3C_02 import mov_window_avg, delete_data
+from data_utils_A3C_02 import mov_window_avg, delete_data, calc_throughput, numpy_encoder, find_runs
 from datetime import datetime
 from pathlib import Path
 import json
@@ -295,10 +296,16 @@ class A3CWorker(mp.Process):
             self.ep_reward_log = os.path.join(params['train_dir'], "W_" + str(self.worker_id) + "_ep_reward.log")
             self.loss_log = os.path.join(params['train_dir'], "W_" + str(self.worker_id) + "_losses.log")
             self.accept_ratio_log = os.path.join(params['train_dir'], 'W_' + str(self.worker_id) + "_accept_ratio.log")
+            self.throughput_log = os.path.join(params['train_dir'], 'W_' + str(self.worker_id) + "_throughputs.log")
+            self.rsc_usage_log = os.path.join(params['train_dir'], 'W_' + str(self.worker_id) + "_rsc_usage.log")
+            self.registerd_req_log = os.path.join(params['train_dir'], 'W_' + str(self.worker_id) + "_registerd_req.log")
         else:
             self.operation_log = os.path.join(params['test_dir'], "W_" + str(self.worker_id) + "_test.log")
             self.ep_reward_log = os.path.join(params['test_dir'], "W_" + str(self.worker_id) + "_ep_reward.log")
             self.accept_ratio_log = os.path.join(params['test_dir'], 'W_' + str(self.worker_id) + "_test_accept_ratio.log")
+            self.throughput_log = os.path.join(params['test_dir'], 'W_' + str(self.worker_id) + "_test_throughputs.log")
+            self.rsc_usage_log = os.path.join(params['test_dir'], 'W_' + str(self.worker_id) + "_test_rsc_usage.log")
+            self.registerd_req_log = os.path.join(params['test_dir'], 'W_' + str(self.worker_id) + "_test_registerd_req.log")
         print(f'Successful Init A3C_Worker {self.worker_id}')
             
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""        
@@ -321,13 +328,17 @@ class A3CWorker(mp.Process):
         # Max number of routing steps (iterations) per episode
         # max_moves = 50
         self.reward_hist = [] # list of reward per episode
+        self.delay_rate_hist = [] # list of delay ratio  per accepted request
         
-        self.registered_req = [] # list of accepted SFC requests
+        # self.registered_req = []  # list of accepted SFC requests
+        self.registered_req = {'registered_request': []}  # list of accepted SFC requests
         self.active_req = [] # list of SFC requests still in the EDF
         self.expired_req = [] # list of expired SFC requests
         self.serving_req = [] # list of accepted requests
+
         self.sfc_embed_map = {}
         self.vnf_embed_map = {}
+        self.success_embed_count = []  # couting the successful SFC requests
             
         ''' Calculation of resource usage '''
         # CPU, RAM, STORAGE usage_rate over time_slot
@@ -402,7 +413,6 @@ class A3CWorker(mp.Process):
                         max(self.params['entropy_factor'] - self.params['entropy_decay_val'], 
                             self.params['entropy_min'])
 
-
             # Play an episode with the env
             print(f"worker_id = {self.worker_id}| local_episode = {epoch}")
             # values, logprobs, entropies, rewards, G, this_episode_rwd = self.run_episode(epoch)
@@ -426,7 +436,19 @@ class A3CWorker(mp.Process):
         # END of FOR loop
     
         with open(self.accept_ratio_log, 'a') as fp:
+            print(f"Number of accepted requests = {self.n_accepted_req}", file=fp)
+            print(f"Max episodes = {self.max_episodes}", file=fp)
             print(f"Acceptance ratio = {self.n_accepted_req / self.max_episodes * 100}", file=fp)
+            print(f"Avg. path len = {self.calc_avg_path_len()}", file=fp)
+            avg_delay_rate = np.mean(self.delay_rate_hist) * 100 # percentage
+            print(f"Avg E2E delay ratio of accepted requests = {avg_delay_rate:.3f}", file=fp)
+
+        # Calculate real_throughput and offered_load
+        self.calc_throughputs()
+        self.export_resource_usage()
+        self.export_registered_reqs()
+        gc.collect()
+
         ''''''''''''''''''''''''''''''''''''''''''''''''
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""
     
@@ -484,7 +506,7 @@ class A3CWorker(mp.Process):
         
         # Create list of nodes embedding the current SFC request
         self.sfc_embed_nodes = [cur_node_id]# SFC node mapping
-        vnf_embed_nodes = {} # VNF compute node
+        self.vnf_embed_nodes = {} # VNF compute node
         success_embed = 0
         
         # Get delay constraint
@@ -584,7 +606,7 @@ class A3CWorker(mp.Process):
             if action['is_embed'] > 0:
                 if self.vnf_item < len(self.vnf_list):
                     # Add to vnf_embed_nodes
-                    vnf_embed_nodes[hol_vnf_name] = cur_node_id
+                    self.vnf_embed_nodes[hol_vnf_name] = cur_node_id
                     # Continue to embed the next vnf
                     self.vnf_item += 1
                     if self.vnf_item < len(self.vnf_list):
@@ -640,11 +662,20 @@ class A3CWorker(mp.Process):
         
             # Register the NEWLY successul embedded request to the serving list
             if success_embed > 0:
-                self.registered_req.append(req)
                 self.sfc_embed_map[req['id']] = self.sfc_embed_nodes
-                self.vnf_embed_map[req['id']] = vnf_embed_nodes
+                self.vnf_embed_map[req['id']] = self.vnf_embed_nodes
                 self.active_req.append(req['id'])
-                self.serving_req.append(req['id'])    
+                self.serving_req.append(req['id'])
+                
+                # Associate SFC embedding and VNF embedding maps to the req
+                accepted_req = {'sfc_map': self.sfc_embed_nodes,
+                                'vnf_embed_map': self.vnf_embed_nodes}
+                self.registered_req['registered_request'].append(accepted_req)
+
+                # Calculate the e2e delay ratio for the accepted request
+                delay_rate = (req['delay_req'] - residual_delay) / req['delay_req']
+                self.delay_rate_hist.append(delay_rate)
+
                 # Update the resource consumption of this episode to EDF resource availability
                 # if the SFC embedding is successfull
                 self.edf.resource_mat = copy(self.edf.temp_resource_mat)
@@ -659,7 +690,6 @@ class A3CWorker(mp.Process):
                     print("1", file=fp)
                 self.n_accepted_req += 1
                 
-
             if fail_embed:    
                 # Keep track of rejected request per time slot
                 self.adm_hist[self.cur_time_slot].update({req['id']:0})
@@ -679,7 +709,7 @@ class A3CWorker(mp.Process):
                     _, G, _ = self.worker_model(state2, hx)
                 G = G.squeeze(0) * (1 - stop_flag)
             
-            # store examples to memory
+            # Store examples to memory
             if self.is_train:
                 self.memory.add_experience(log_prob_action, entropy, critic_value, reward, stop_flag, G)
 
@@ -1015,124 +1045,167 @@ class A3CWorker(mp.Process):
 
         return actor_loss, critic_loss, len(rewards)
     
-    
+    def calc_throughputs(self):
+        """Calculate the real throughput and the offered load
+            Export data to log file
+
+        Returns:
+            real_tp [list]: list of per-epoch (time slot) throughput obtained from the RL algo
+            offered_load [list]: list of per-epoch (time slot) throughput obtained from the perfect scenario
+        """
+        # Calculate throughputs
+        offered_load, real_tp = calc_throughput(self.adm_hist, self.req_list, 
+                                              self.all_arrive_req, self.serving_req, 
+                                              self.start_time_slot, 
+                                              self.edf.sfc_specs, self.edf.vnf_specs)
+        # Export data to log file
+        with open(self.throughput_log, 'a') as fp:
+            print("Time_slots \t Offered_load [bw unit]  \t Real_throughput [bw unit]", file=fp)
+            for i in range(len(offered_load)):
+                print(f"{i} {offered_load[i]:.3f} {real_tp[i]:.3f}", file=fp)
+
+        return offered_load, real_tp
+
+    def export_resource_usage(self):
+        """Export CPU, RAM, STORAGE, and BANDWIDTH usages to log file
+        """
+        with open(self.rsc_usage_log, 'a') as fp:
+            print("CPU \t RAM \t STORAGE \t BANDWIDTH", file=fp)
+            [print(f"{self.cpu_usage[i]} {self.ram_usage[i]} {self.sto_usage[i]} {self.bw_usage[i]}", file=fp) \
+                for i in range(len(self.cpu_usage))]
+
+    def export_registered_reqs(self):
+        """Export registered service requests to JSON file
+        """
+        with open(self.registerd_req_log, 'w') as fp:
+            json.dump(self.registered_req, fp, indent=2, default=numpy_encoder)
+
+    def calc_avg_path_len(self):
+        tot_links = 0
+        for req_item in self.registered_req['registered_request']:
+            # tot_links += len(req_item['sfc_map']) - 1 # old calculation
+            # Exclude the self-connected link, i.e., i-i link
+            n_diff_nodes, _, _ = find_runs(req_item['sfc_map'])
+            tot_links += len(n_diff_nodes) - 1
+        avg_path_len = tot_links / self.n_accepted_req
+        return avg_path_len
         
-# =============================================================================
+# END OF A3CWORKER CLASS=============================================================================
 
  
 
 # =============================================================================
 #### main function
 # =============================================================================
-def main():
-    is_training = False
+# def main():
+#     is_training = False
     
-    MODEL_DIR = "A3C_SFCE_models"
-    MODEL_NAME = "a3c_cartpole"
+#     MODEL_DIR = "A3C_SFCE_models"
+#     MODEL_NAME = "a3c_cartpole"
     
-    # Neural network structure
-    input_dims = 4
-    fc_hid_layers = [64, 128, 64]
-    actor_dims = 2
+#     # Neural network structure
+#     input_dims = 4
+#     fc_hid_layers = [64, 128, 64]
+#     actor_dims = 2
     
-    # Training Datasets
-    net_topo_list = ['ibm_100000_slots_1_con.net', 'ibm_200000_slots_1_con.net']
-    sfc_spec_file = 'sfc_file.sfc'
-    traffic_dataset_list = ['reordered_traffic_100000_slots_1_con.tra', 'reordered_traffic_200000_slots_1_con.tra']
+#     # Training Datasets
+#     net_topo_list = ['ibm_100000_slots_1_con.net', 'ibm_200000_slots_1_con.net']
+#     sfc_spec_file = 'sfc_file.sfc'
+#     traffic_dataset_list = ['reordered_traffic_100000_slots_1_con.tra', 'reordered_traffic_200000_slots_1_con.tra']
     
-    #### Training phase
-    if is_training:
-        print("Training the A3C RL-agent")
-        MasterNode = ACNet(MODEL_NAME, MODEL_DIR, fc_hid_layers, input_dims, actor_dims) #create an instance of A2C model
-        MasterNode.share_memory() # the model's parameters are globally shared among processes
-        N_steps = 50;
-        processes = [] # A list to store instantiated processes
-        params = {
-            'epochs':2000,
-            'n_workers': 6,
-            'net_topos': net_topo_list,
-            'sfc_spec': sfc_spec_file,
-            'traffic_datasets': traffic_dataset_list
-        }
+#     #### Training phase
+#     if is_training:
+#         print("Training the A3C RL-agent")
+#         MasterNode = ACNet(MODEL_NAME, MODEL_DIR, fc_hid_layers, input_dims, actor_dims) #create an instance of A2C model
+#         MasterNode.share_memory() # the model's parameters are globally shared among processes
+#         N_steps = 50;
+#         processes = [] # A list to store instantiated processes
+#         params = {
+#             'epochs':2000,
+#             'n_workers': 6,
+#             'net_topos': net_topo_list,
+#             'sfc_spec': sfc_spec_file,
+#             'traffic_datasets': traffic_dataset_list
+#         }
         
-        # A shared global counter using multiprocessing’s
-        # built-in shared object. The ‘i’ parameter indicates
-        # the type is integer.
-        counter = mp.Value('i',0)  # global counter shared among processes
+#         # A shared global counter using multiprocessing’s
+#         # built-in shared object. The ‘i’ parameter indicates
+#         # the type is integer.
+#         counter = mp.Value('i',0)  # global counter shared among processes
         
-        for i in range(params['n_workers']):
-            # Create a worker environment
-            worker_env = gym.make("CartPole-v1")
-            # Create an A3C instance
-            #a3c_worker = A3CWorker(i, MasterNode, worker_env, params)
-            a3c_worker = A3CWorker(worker_id=i, worker_model=MasterNode, 
-                                   worker_env=worker_env, params=params,
-                                   N_steps=N_steps, clc=0.1, gamma=0.95)
-            # instantiate a process invoking a worker who does the training
-            # p = mp.Process(target=worker, args=(i, MasterNode, counter, params, worker_env, N_steps))
-            p = mp.Process(target=a3c_worker.run, args=(counter,))
-            p.start() 
-            processes.append(p)
+#         for i in range(params['n_workers']):
+#             # Create a worker environment
+#             worker_env = gym.make("CartPole-v1")
+#             # Create an A3C instance
+#             #a3c_worker = A3CWorker(i, MasterNode, worker_env, params)
+#             a3c_worker = A3CWorker(worker_id=i, worker_model=MasterNode, 
+#                                    worker_env=worker_env, params=params,
+#                                    N_steps=N_steps, clc=0.1, gamma=0.95)
+#             # instantiate a process invoking a worker who does the training
+#             # p = mp.Process(target=worker, args=(i, MasterNode, counter, params, worker_env, N_steps))
+#             p = mp.Process(target=a3c_worker.run, args=(counter,))
+#             p.start() 
+#             processes.append(p)
         
-        # Wait for each process to be done before returning to the main thread
-        [p.join() for p in processes] 
-        # Terminate each process
-        [p.terminate() for p in processes]
-        # Global counter and the first process's exit code
-        print(counter.value,processes[1].exitcode) 
+#         # Wait for each process to be done before returning to the main thread
+#         [p.join() for p in processes] 
+#         # Terminate each process
+#         [p.terminate() for p in processes]
+#         # Global counter and the first process's exit code
+#         print(counter.value,processes[1].exitcode) 
         
-        # Save the model
-        print("Training done!")
-        MasterNode.save_params()
-        # save_model(model_dir, model_name, MasterNode)
+#         # Save the model
+#         print("Training done!")
+#         MasterNode.save_params()
+#         # save_model(model_dir, model_name, MasterNode)
     
-    #### Testing phase
-    else:
-        print("Testing the trained A2C RL-agent")
-        env = gym.make("CartPole-v1")
-        env.reset()
+#     #### Testing phase
+#     else:
+#         print("Testing the trained A2C RL-agent")
+#         env = gym.make("CartPole-v1")
+#         env.reset()
         
-        # Load neural network model
-        MasterNode = ACNet(MODEL_NAME, MODEL_DIR, fc_hid_layers, input_dims, actor_dims) # create a new instance of neural net
-        # load_model(model_dir, model_name, MasterNode)
-        MasterNode.load_params()
+#         # Load neural network model
+#         MasterNode = ACNet(MODEL_NAME, MODEL_DIR, fc_hid_layers, input_dims, actor_dims) # create a new instance of neural net
+#         # load_model(model_dir, model_name, MasterNode)
+#         MasterNode.load_params()
         
-        trial_rewards = []
-        for n_trial in range(20):
-            rewards = []
-            accum_reward = 0
-            done = False
-            total_iter = 0
-            while (done==False and total_iter<500):
-                total_iter += 1
-                # observe current state
-                state_ = np.array(env.env.state)
-                state = torch.from_numpy(state_).float()
+#         trial_rewards = []
+#         for n_trial in range(20):
+#             rewards = []
+#             accum_reward = 0
+#             done = False
+#             total_iter = 0
+#             while (done==False and total_iter<500):
+#                 total_iter += 1
+#                 # observe current state
+#                 state_ = np.array(env.env.state)
+#                 state = torch.from_numpy(state_).float()
                 
-                # feed state to the neural network
-                logits, value = MasterNode(state)
+#                 # feed state to the neural network
+#                 logits, value = MasterNode(state)
                 
-                # make a decision
-                action_dist = torch.distributions.Categorical(logits=logits)
-                action = action_dist.sample()
+#                 # make a decision
+#                 action_dist = torch.distributions.Categorical(logits=logits)
+#                 action = action_dist.sample()
                 
-                # observe next_step, reward, done
-                state2, reward, done, info = env.step(action.detach().numpy())
-                # print(f"Iter {total_iter}| Reward = {reward} | Done = {done}")
-                accum_reward = accum_reward + reward
-                rewards.append(accum_reward)
-                # check episode done
-                if done: 
-                    env.reset()
-                else:# or continue to play
-                    state_ = np.array(env.env.state)
-                    state = torch.from_numpy(state_).float()
-                # env.render()
-            print(f"Trial {n_trial}| accum_reward = {accum_reward}")
-            trial_rewards.append(accum_reward)
-            # plt.plot(rewards)
-        avg_trial_reward = np.mean(trial_rewards)
-        print(f"avg_trial_reward = {avg_trial_reward}")
+#                 # observe next_step, reward, done
+#                 state2, reward, done, info = env.step(action.detach().numpy())
+#                 # print(f"Iter {total_iter}| Reward = {reward} | Done = {done}")
+#                 accum_reward = accum_reward + reward
+#                 rewards.append(accum_reward)
+#                 # check episode done
+#                 if done: 
+#                     env.reset()
+#                 else:# or continue to play
+#                     state_ = np.array(env.env.state)
+#                     state = torch.from_numpy(state_).float()
+#                 # env.render()
+#             print(f"Trial {n_trial}| accum_reward = {accum_reward}")
+#             trial_rewards.append(accum_reward)
+#             # plt.plot(rewards)
+#         avg_trial_reward = np.mean(trial_rewards)
+#         print(f"avg_trial_reward = {avg_trial_reward}")
 # =============================================================================
 
 # =============================================================================
