@@ -32,7 +32,8 @@ import json
 import shutil
 import argparse
 from dataset_and_params import get_sfc_spec_file, get_train_datasets, get_test_datasets, get_train_test_params
-from plot_results import plot_episode_rwd, plot_loss_val, plot_accum_accept_req, plot_throughputs, plot_rsc_usages
+from plot_results import plot_episode_rwd, plot_loss_val, plot_accum_accept_req
+from plot_results import plot_throughputs, plot_rsc_usages, plot_delay_stress_level
 
 
 # def read_reward_data(log_file):
@@ -432,6 +433,10 @@ def main(args):
     ''' Plot resource usages over epochs'''
     plot_rsc_usages(args.mode, input_params, now)
 
+    ''' Plot delay stress level'''
+    plot_delay_stress_level(args.mode, input_params, now)
+
+
     #######################################################
     
     print("Return the Before_Train and After_Train models")
@@ -529,12 +534,15 @@ if __name__ == "__main__":
     parser.add_argument("--opt_centered", default=False, type=bool, help="Whether using centered or not for the optimzer")
     parser.add_argument("--test_size", default="15k", type=str, 
                         help="Choose 15k-dataset or 100k-dataset for testing. Support options: 15k, 100k")
-
+    parser.add_argument("--traffic_type", default='Legacy', type=str, 
+                        help="Traffic type. Support options: 'Legacy', 'Conus36'")
+    parser.add_argument("--en_log", default=False, type=bool, help="Enable training/testing log. Options: True/False")
+                        
     args = parser.parse_args()
     if args.n_workers <= 0: 
         raise ValueError("A positive value is required.")
-    if args.n_workers > 12: 
-        raise ValueError("Support upto 12 workers.")
+    if args.n_workers > 24: 
+        raise ValueError("Support upto 24 workers.")
     
     if args.mode == "test_mode":
         args.n_workers = 1

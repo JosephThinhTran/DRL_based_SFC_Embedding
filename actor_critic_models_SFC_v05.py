@@ -299,6 +299,7 @@ class A3CWorker(mp.Process):
             self.throughput_log = os.path.join(params['train_dir'], 'W_' + str(self.worker_id) + "_throughputs.log")
             self.rsc_usage_log = os.path.join(params['train_dir'], 'W_' + str(self.worker_id) + "_rsc_usage.log")
             self.registerd_req_log = os.path.join(params['train_dir'], 'W_' + str(self.worker_id) + "_registerd_req.log")
+            self.delay_stress_log = os.path.join(params['train_dir'], 'W_' + str(self.worker_id) + "_delay_stress.log")
         else:
             self.operation_log = os.path.join(params['test_dir'], "W_" + str(self.worker_id) + "_test.log")
             self.ep_reward_log = os.path.join(params['test_dir'], "W_" + str(self.worker_id) + "_ep_reward.log")
@@ -306,6 +307,7 @@ class A3CWorker(mp.Process):
             self.throughput_log = os.path.join(params['test_dir'], 'W_' + str(self.worker_id) + "_test_throughputs.log")
             self.rsc_usage_log = os.path.join(params['test_dir'], 'W_' + str(self.worker_id) + "_test_rsc_usage.log")
             self.registerd_req_log = os.path.join(params['test_dir'], 'W_' + str(self.worker_id) + "_test_registerd_req.log")
+            self.delay_stress_log = os.path.join(params['test_dir'], 'W_' + str(self.worker_id) + "_test_delay_stress.log")
         print(f'Successful Init A3C_Worker {self.worker_id}')
             
     """""""""""""""""""""""""""""""""""""""""""""""""""""""'"""        
@@ -447,6 +449,7 @@ class A3CWorker(mp.Process):
         self.calc_throughputs()
         self.export_resource_usage()
         self.export_registered_reqs()
+        self.export_delay_stress_level()
         gc.collect()
 
         ''''''''''''''''''''''''''''''''''''''''''''''''
@@ -468,10 +471,11 @@ class A3CWorker(mp.Process):
         print(f"Req_Id={req['id']}|   source={req['source']}|   destination={req['destination']}|\
                {req['sfc_id']}:[{self.edf.sfc_specs[req['sfc_id']]}]|\
                       bw={req['bw']}   delay_req={req['delay_req']:.4f}")
-        with open(self.operation_log, 'a') as fp:
-            print(f"Req_Id={req['id']}|   source={req['source']}|   destination={req['destination']}|\
-               {req['sfc_id']}:[{self.edf.sfc_specs[req['sfc_id']]}]|\
-                      bw={req['bw']}   delay_req={req['delay_req']:.4f}", file=fp)
+        if self.params['en_log']:
+            with open(self.operation_log, 'a') as fp:
+                print(f"Req_Id={req['id']}|   source={req['source']}|   destination={req['destination']}|\
+                {req['sfc_id']}:[{self.edf.sfc_specs[req['sfc_id']]}]|\
+                        bw={req['bw']}   delay_req={req['delay_req']:.4f}", file=fp)
         
         #### Check new time slot
         if req['arrival_time'] == self.cur_time_slot + 1 + self.start_time_slot:
@@ -657,8 +661,9 @@ class A3CWorker(mp.Process):
                 success_embed = 1 if done_embed > 0 else 0
 
             print(f"Time_{self.cur_time_slot}_Epoch_{epoch}_Step_{mov}   Cur_node={prev_node_id}   {req['sfc_id']}-{prev_hol_vnf_name}   Action={action}   Residual_delay={residual_delay:.4f}   Step_Reward={reward:.3f}   Success_embed={success_embed}")
-            with open(self.operation_log, 'a') as train_fp:
-                print(f"Time_{self.cur_time_slot}_Epoch_{epoch}_Step_{mov}   Cur_node={prev_node_id}   {req['sfc_id']}-{prev_hol_vnf_name}   Action={action}   Residual_delay={residual_delay:.4f}   Step_Reward={reward:.3f}   Success_embed={success_embed}", file=train_fp)
+            if self.params['en_log']:
+                with open(self.operation_log, 'a') as train_fp:
+                    print(f"Time_{self.cur_time_slot}_Epoch_{epoch}_Step_{mov}   Cur_node={prev_node_id}   {req['sfc_id']}-{prev_hol_vnf_name}   Action={action}   Residual_delay={residual_delay:.4f}   Step_Reward={reward:.3f}   Success_embed={success_embed}", file=train_fp)
         
             # Register the NEWLY successul embedded request to the serving list
             if success_embed > 0:
@@ -1089,6 +1094,25 @@ class A3CWorker(mp.Process):
             tot_links += len(n_diff_nodes) - 1
         avg_path_len = tot_links / self.n_accepted_req
         return avg_path_len
+
+    def export_delay_stress_level(self):
+        """Export delay stress level [%] of accepted requests into file
+            Plot a histogram of the delay stress level
+        """
+        with open(self.delay_stress_log, 'w') as fp:
+            for i in range(len(self.delay_rate_hist)):
+                print(f"{self.delay_rate_hist[i]*100}", file=fp)
+
+        # x = np.array(self.delay_rate_hist) * 100
+        # plt.figure(figsize=(10, 7.5))
+        # plt.xlabel("Delay stress level [%]", fontsize=22)
+        # plt.ylabel("Num. of requests", fontsize=22)
+        # plt.hist(x, bins=10)
+        # if self.is_train:
+        #     fig_name = os.path.join(self.params['train_dir'], 'W_' + str(self.worker_id) + "_delay_stress")
+        # else:
+        #     fig_name = os.path.join(self.params['test_dir'], 'W_' + str(self.worker_id) + "_test_delay_stress")
+        # plt.savefig(fig_name)
         
 # END OF A3CWORKER CLASS=============================================================================
 

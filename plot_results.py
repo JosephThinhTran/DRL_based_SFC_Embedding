@@ -275,3 +275,43 @@ def plot_rsc_usages(mode, params, time):
         plt.savefig(fig_name)
     
     return rsc_usage_data
+
+def read_delay_stress_data(log_files):
+    datas = []
+    for fname in log_files:
+        x = []
+        with open(fname, 'r') as f:
+            lines = f.readlines()
+        for i in range(len(lines)):
+            x.append(float(lines[i].split()[0]))
+        datas.append(x)
+    return datas
+
+def plot_delay_stress_level(mode, params, time):
+    OPERATION_MODE = {'train_mode': 1, 'test_mode': 0}
+    
+    delay_files = []
+    for w in range(params['n_workers']):
+        if OPERATION_MODE[mode] == OPERATION_MODE["train_mode"]:
+            fp = os.path.join(params['train_dir'], 'W_' + str(w) + "_delay_stress.log")
+        else:
+            fp = os.path.join(params['test_dir'], 'W_' + str(w) + "_test_delay_stress.log")
+        delay_files.append(fp)
+    delay_datas = read_delay_stress_data(delay_files)
+
+    for i in range(params['n_workers']):
+        x = delay_datas[i]
+        plt.figure(figsize=(10, 7.5))
+        plt.xlabel("Delay stress level [%]", fontsize=22)
+        plt.ylabel("Num. of requests", fontsize=22)
+        plt.hist(x, bins=10)
+        if OPERATION_MODE[mode] == OPERATION_MODE["train_mode"]:
+            fig_name = os.path.join(params['train_dir'], 
+                                'W_' + str(i) + "_delay_stress_" + time.strftime("%Y-%B-%d__%H-%M"))
+        else:
+            fig_name = os.path.join(params['test_dir'], 
+                                'W_' + str(i) + "_test_delay_stress_" + time.strftime("%Y-%B-%d__%H-%M"))
+        plt.savefig(fig_name)
+    
+
+
