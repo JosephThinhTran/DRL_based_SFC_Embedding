@@ -169,7 +169,9 @@ def plot_accum_accept_req(mode, params, time):
     
     # Plot results
     legs = ['W_' + str(i) for i in range(params['n_workers'])]
-    colors = ['r', 'g', 'b', 'c', 'm', 'y', 'k', 'orange', 'fuchsia', 'teal', 'lime', 'pink']
+    colors = ['r', 'g', 'b', 'c', 'm', 'y', 'k', 'orange', 
+              'fuchsia', 'teal', 'lime', 'pink', 'gold', 'darkgoldenrod', 'khaki', 'olive',
+              'turquoise', 'aqua', 'cadetblue', 'slategray', 'navy', 'indigo', 'darkorchid', 'crimson']
     plt.figure(figsize=(10,7.5))
     plt.grid()
     plt.title("Accumulated accepted request over episodes")
