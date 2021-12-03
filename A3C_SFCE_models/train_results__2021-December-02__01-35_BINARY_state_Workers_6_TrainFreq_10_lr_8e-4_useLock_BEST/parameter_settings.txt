@@ -1,0 +1,42 @@
+SYSTEM PARAMETERS
+training directory: A3C_SFCE_models\train_results__2021-December-02__01-35_BINARY_state 
+
+is_binary_state = True
+is_neighbor_mask = False
+is_continue_training = False
+state_noise_scale = 100
+NEURAL NETWORK SETTINGS
+INPUT_DIMS = 140
+ACTOR_OUTPUT_DIMS = 36 
+
+Network Architecture = Shared_Net
+FC_COMMON_1 = 128, FC_COMMON_2 = 128, FC_CRITIC_1 = 128
+
+Learning parameters
+gamma = 0.88
+tau = 1
+lr = 0.001
+critic_factor = 1
+actor_factor = 0.25
+entropy_factor = 0.1
+entropy_decay_val = 0.01
+entropy_decay_freq = 12000
+entropy_min = 0.01
+
+Optimizer parameters
+Opt_Learning_Rate = 0.0008
+Opt_Epsilon = 1e-05
+Opt_Weight_Decay = 0
+Opt_Alpha = 0.99
+Opt_Momentum = 0.2
+Opt_Centered = False
+
+Cost factors betas
+betas = [1.0, 25, 15, 0.0]
+Big_Reward = 3.0
+
+Training parameters
+n_workers = 6
+n_epochs = 200000
+train_freq = 10
+advantage calc method = N_step return
