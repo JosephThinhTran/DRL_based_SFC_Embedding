@@ -1,0 +1,6 @@
+Avg. throughput from DQN algo. [bw unit]: 10143.834
+Avg. throughput from A3C algo. [bw unit]: 10310.308
+Avg. throughput from RCSP algo. [bw unit]: 10531.784
+Average throughput gap [%] of DQN-based algorithm: 95.784 (+/- 0.920)
+Average throughput gap [%] of A3C-based algorithm: 97.337 (+/- 0.347)
+Average throughput gap [%] of RCSP-based algorithm: 99.410 (+/- 0.071)
