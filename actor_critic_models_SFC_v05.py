@@ -424,10 +424,11 @@ class A3CWorker(mp.Process):
             
             # Worker updates the global model's parameters
             if self.is_train and ((epoch+1) % self.train_freq == 0):
-                print(f"UPDATE NEURAL NET's Params at epoch {epoch}")
-                actor_loss, critic_loss = self.update_params_batch()
-                # Update the global counter
+                # Use the g_counter to avoid update conflict among workers
                 with self.g_counter.get_lock():
+                    print(f"UPDATE NEURAL NET's Params at epoch {epoch}")
+                    actor_loss, critic_loss = self.update_params_batch()
+                    # Update the global counter
                     self.g_counter.value += 1
 
             # Garbage collector and clear output
@@ -659,7 +660,8 @@ class A3CWorker(mp.Process):
                 fail_embed = 0
                 success_embed = 1 if done_embed > 0 else 0
 
-            print(f"Time_{self.cur_time_slot}_Epoch_{epoch}_Step_{mov}   Cur_node={prev_node_id}   {req['sfc_id']}-{prev_hol_vnf_name}   Action={action}   Residual_delay={residual_delay:.4f}   Step_Reward={reward:.3f}   Success_embed={success_embed}")
+            if success_embed or fail_embed:
+                print(f"Time_{self.cur_time_slot}_Epoch_{epoch}_Step_{mov}   Cur_node={prev_node_id}   {req['sfc_id']}-{prev_hol_vnf_name}   Action={action}   Residual_delay={residual_delay:.4f}   Step_Reward={reward:.3f}   Success_embed={success_embed}")
             if self.params['en_log']:
                 with open(self.operation_log, 'a') as train_fp:
                     print(f"Time_{self.cur_time_slot}_Epoch_{epoch}_Step_{mov}   Cur_node={prev_node_id}   {req['sfc_id']}-{prev_hol_vnf_name}   Action={action}   Residual_delay={residual_delay:.4f}   Step_Reward={reward:.3f}   Success_embed={success_embed}", file=train_fp)

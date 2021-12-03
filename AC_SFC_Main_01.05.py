@@ -323,8 +323,8 @@ def main(args):
                                         alpha=args.opt_alpha, momentum=args.opt_momentum, centered=args.opt_centered)
         # global_optimizer = SharedAdam(Global_Model.parameters(), lr=input_params['learning_rate'])
         processes = []
-        g_counter = mp.Value('i', 0) # global counter shared among processes
-        
+        g_counter = mp.Value('i', 0, lock=True) # global counter shared among processes
+
         # create a3c_workers
         all_a3c_workers = []
         for idx in range(input_params['n_workers']):
@@ -408,7 +408,8 @@ def main(args):
         Global_Model.share_memory()
         global_optimizer = SharedRMSProp(Global_Model.parameters(), lr=input_params['learning_rate'])
         processes = []
-        g_counter = mp.Value('i', 0) # global counter shared among processes
+        g_counter = mp.Value('i', 0, lock=True) # global counter shared among processes
+
         a3c_worker = A3CWorker(worker_id=idx, 
                                 global_model=Global_Model,
                                 optimizer=global_optimizer,
@@ -553,5 +554,6 @@ if __name__ == "__main__":
     ADV_STYLE = {'n_step_return': 1, 'gae': 2}# n-step return or GAE
 
     Before_Model, After_Model = main(args)
-    calc_model_diff(Before_Model, After_Model, args.net_arch)
+    if args.mode == "train_mode":
+        calc_model_diff(Before_Model, After_Model, args.net_arch)
 

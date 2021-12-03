@@ -41,8 +41,7 @@ import argparse
 def main():
     now = datetime.now()
     # RESULT_DIR = args.result_dir
-    # NTimeSlots = args.n_time_slots
-    RESULT_DIR = "results_comparison_2021_Nov_29"
+    RESULT_DIR = "results_comparison_2021_Dec_02"
     NTimeSlots = 200_000
     
     
@@ -65,7 +64,7 @@ def main():
     A3cMovRwd = data_utils.mov_window_avg(A3cRwdEps, 1000)
 
     # px = 1/plt.rcParams['figure.dpi']  # pixel in inches
-    dpi = 100
+    dpi = 125
     # Plot results
     plt.figure(figsize=(1500/dpi, 1000/dpi), dpi=dpi)
     fig, ax = plt.subplots()
@@ -93,5 +92,9 @@ def main():
 #     print('Done!')
 
 if __name__ == "__main__":
+    # parser = argparse.ArgumentParser(description="Compare throughput among algoriths: DQN, A3C, RSCP")
+    # parser.add_argument("result_dir", type=str, help="Folder storing the results")
+    # args = parser.parse_args()
+    # main(args)
     main()
     print("Done!")

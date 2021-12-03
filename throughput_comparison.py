@@ -148,7 +148,7 @@ def main(args):
     print(f'Average throughput gap [%] of RCSP-based algorithm: {rcsp_avg_gap:.3f} (+/- {rcsp_var_gap:.3f})')
 
     #### Export comparison results to file
-    summary_file = os.path.join(RESULT_DIR, 'results_summary' + now.strftime("%Y-%B-%d__%H-%M") + '.log')
+    summary_file = os.path.join(RESULT_DIR, 'results_summary_' + now.strftime("%Y-%B-%d__%H-%M") + '.log')
     with open(summary_file, 'a') as fp:
         print(f'Avg. throughput from DQN algo. [bw unit]: {dqn_avg_tp:.3f}', file=fp)
         print(f'Avg. throughput from A3C algo. [bw unit]: {a3c_avg_tp:.3f}', file=fp)
