@@ -114,7 +114,7 @@ class TFDQNet:
 
         # compile the model
         opt = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
-        model.compile(optimizer=opt, loss=keras.losses.MeanSquaredError, metrics=['accuracy'])
+        model.compile(optimizer=opt, loss=keras.losses.MeanSquaredError(), metrics=['accuracy'])
 
         # # config neural net
         # self.fc1 = nn.Linear(self.input_dims, self.fc_hid_layers[0])
@@ -283,11 +283,11 @@ class TFDQAgent(object):
         minibatch = random.sample(self.replay_buffer, self.batch_size)
 
         # convert to tensors
-        state1_batch = tf.concat([s1 for (s1, a, r, s2, d) in minibatch])
+        state1_batch = tf.concat([s1 for (s1, a, r, s2, d) in minibatch], axis=0)
         action_batch = tf.convert_to_tensor([a for (s1, a, r, s2, d) in minibatch])
-        reward_batch = tf.convert_to_tensor([r for (s1, a, r, s2, d) in minibatch])
-        state2_batch = torch.concat([s2 for (s1, a, r, s2, d) in minibatch])
-        done_batch = tf.convert_to_tensor([d for (s1, a, r, s2, d) in minibatch])
+        reward_batch = tf.convert_to_tensor([r for (s1, a, r, s2, d) in minibatch], dtype=np.float32)
+        state2_batch = tf.concat([s2 for (s1, a, r, s2, d) in minibatch], axis=0)
+        done_batch = tf.convert_to_tensor([d for (s1, a, r, s2, d) in minibatch], dtype=np.float32)
         # state1_batch = torch.cat([s1 for (s1, a, r, s2, d) in minibatch])
         # action_batch = torch.Tensor([a for (s1, a, r, s2, d) in minibatch])
         # reward_batch = torch.Tensor([r for (s1, a, r, s2, d) in minibatch])
@@ -308,18 +308,21 @@ class TFDQAgent(object):
         #    Q2 = self.target_q_net.forward(state2_batch)
 
         # Y = reward_batch + self.gamma * ((1 - done_batch) * torch.max(Q2, dim=1)[0])
-        Y = reward_batch + self.gamma * ((1 - done_batch) * tf.math.reduce_max(Q2, dim=1)[0])
+        Y = reward_batch + self.gamma * ((1 - done_batch) * tf.reduce_max(Q2, axis=1)[0])
         # X = Q1.gather(dim=1, index=action_batch.long().unsqueeze(dim=1)).squeeze()
-        X = Q1.gather(dim=1, index=action_batch.long().unsqueeze(dim=1)).squeeze()
-        loss_val = torch.nn.functional.mse_loss(X, Y.detach())
+        X = tf.convert_to_tensor([Q1[i][action_batch[i]] for i in range(len(Q1))])
+        loss_val = tf.keras.losses.mean_squared_error(X, Y)
         # loss_val = self.q_net.loss_fn(X, Y.detach())
 
         # update network params
-        self.q_net.optimizer.zero_grad()
-        loss_val.backward()
-        self.q_net.optimizer.step()
+        self.q_net.model.train_on_batch(state1_batch, Y)
+        # self.q_net.optimizer.zero_grad()
+        # loss_val.backward()
+        # self.q_net.optimizer.step()
 
-        return loss_val.item()
+        # return loss_val.item()
+
+        return loss_val
 
     #####################################
     def hard_sync(self):

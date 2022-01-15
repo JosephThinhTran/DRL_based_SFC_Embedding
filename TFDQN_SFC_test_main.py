@@ -28,6 +28,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 import json
+import tensorflow as tf
 from tf_DQN_agent import TFEDFEnv
 
 
@@ -76,7 +77,7 @@ EPSILON_UPDATE_PERIOD = 10
 # N_EPOCHS = int(n_req*0.4)
 N_EPOCHS = 125_000 if not IS_CONTINUE_TRAINING else 100_000
 BUFFER_SIZE = 500_000
-BATCH_SIZE = 200
+BATCH_SIZE = 1
 SYNC_FREQ = 100
 
 #### Create Q agent
@@ -271,7 +272,9 @@ for epoch in range(N_EPOCHS):
         state1 = edf.render_state_frac(req, hol_vnf_name, cur_node_id)
     state1 = state1.reshape(1, INPUT_DIMS) + np.random.rand(1, INPUT_DIMS)/STATE_NOISE_SCALE
     # state1 = torch.from_numpy(state1).float()
-    
+    state1 = tf.convert_to_tensor(state1, dtype=np.float32)
+
+
     # Perform SFC embedding & Routing
     stop_flag = 0
     mov = 0
@@ -341,7 +344,7 @@ for epoch in range(N_EPOCHS):
             state2 = edf.render_state_frac(req, hol_vnf_name, cur_node_id)
         state2 = state2.reshape(1, INPUT_DIMS) + np.random.rand(1, INPUT_DIMS)/STATE_NOISE_SCALE
         # state2 = torch.from_numpy(state2).float()
-        
+        state2 = tf.convert_to_tensor(state2, dtype=np.float32)
         # Calculate step reward
         reward = edf.reward(action, residual_delay, proc_latency, 
                             new_link_latency, done_embed, prev_node_id, prev_hol_vnf_name)
