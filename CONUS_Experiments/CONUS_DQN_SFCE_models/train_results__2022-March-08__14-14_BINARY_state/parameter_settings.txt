@@ -1,0 +1,26 @@
+System parameters
+training directory: CONUS_DQN_SFCE_models\train_results__2022-March-08__14-14_BINARY_state 
+
+IS_BINARY_STATE = True
+IS_NEIGHBOR_MASK = False
+IS_CONTINUE_TRAINING = False
+STATE_NOISE_SCALE = 50.0
+Neural network settings
+INPUT_DIMS = 266
+L2 = 256, L3 = 256
+FC_HID_LAYERS  = [256 256]
+OUTPUT_DIMS = 72 
+
+Learning parameters
+GAMMA = 0.785
+LEARNING_RATE = 0.0001
+DECAY_RATE = 8e-05
+EPSILON = 0.4
+MIN_EPSILON = 0.02
+EPSILON_UPDATE_PERIOD = 10 
+
+Training parameters
+N_EPOCHS = 150000
+BUFFER_SIZE = 500000
+BATCH_SIZE = 200
+SYNC_FREQ = 100
